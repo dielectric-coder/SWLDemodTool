@@ -42,7 +42,7 @@ Screen {
 }
 
 #conn-status {
-    height: 3;
+    height: 4;
     background: black;
     color: #a3aed2;
     padding: 0 2;
@@ -58,7 +58,7 @@ Screen {
 }
 
 #spectrum-display {
-    height: 5;
+    height: 12;
     background: black;
     color: #00cccc;
     padding: 0 2;
@@ -66,7 +66,7 @@ Screen {
 }
 
 #audio-info {
-    height: 4;
+    height: 5;
     background: black;
     color: #a3aed2;
     padding: 0 2;
@@ -74,10 +74,7 @@ Screen {
 }
 
 #signal-info {
-    height: 1;
-    background: black;
-    color: #a3aed2;
-    padding: 0 2;
+    height: 0;
 }
 
 #status-bar {
@@ -124,6 +121,8 @@ class DemodApp(App):
         ("minus", "volume_down", "Vol-"),
         ("right_square_bracket", "bw_up", "BW+"),
         ("left_square_bracket", "bw_down", "BW-"),
+        ("shift+right", "zoom_in", "Zoom+"),
+        ("shift+left", "zoom_out", "Zoom-"),
     ]
 
     utc_display = reactive("--:-- UTC")
@@ -152,6 +151,14 @@ class DemodApp(App):
         # Audio level tracking
         self._audio_level_db = -120.0
         self._audio_level_lock = threading.Lock()
+
+        # S-meter from CAT
+        self._s_unit = "S0"
+        self._s_raw = 0
+        self._s_lock = threading.Lock()
+
+        # Spectrum zoom: fraction of full bandwidth shown (1.0 = full, 0.0625 = 1/16)
+        self._spectrum_zoom = 1.0
 
     def compose(self):
         yield Static(id="title-bar")
@@ -213,9 +220,9 @@ class DemodApp(App):
             rate_str = f"  {self.iq_client.sample_rate} Hz  {self.iq_client.format_bits}-bit IQ"
 
         text = (
-            f"  IQ  {iq_icon} {self.host}:{self.iq_port}{rate_str}\n"
-            f"  CAT {cat_icon} {self.host}:{self.cat_port}    "
-            f"Audio {audio_icon} {self.audio.sample_rate} Hz"
+            f"    IQ {iq_icon} {self.host}:{self.iq_port}{rate_str}\n"
+            f"   CAT {cat_icon} {self.host}:{self.cat_port}\n"
+            f" Audio {audio_icon} {self.audio.sample_rate} Hz"
         )
         w.update(Text.from_markup(text))
 
@@ -238,25 +245,38 @@ class DemodApp(App):
             avg = np.mean(list(self._spectrum_buf), axis=0)
             self._avg_spectrum = avg
 
+        # Zoom: slice the center portion of the FFT
+        n = len(avg)
+        visible = max(4, int(n * self._spectrum_zoom))
+        start = (n - visible) // 2
+        zoomed = avg[start:start + visible]
+
         try:
             width = self.size.width - 6
         except Exception:
             width = 60
         width = max(20, min(width, 200))
 
-        line = spectrum_to_sparkline(avg, width=width, min_db=-120.0, max_db=-20.0)
+        graph = spectrum_to_sparkline(zoomed, width=width, height=9, min_db=-120.0, max_db=-20.0)
+
+        # Indent each row
+        indented = "\n".join("  " + row for row in graph.split("\n"))
 
         center = width // 2
         marker_line = " " * center + "↑" + " " * (width - center - 1)
 
+        # Show center frequency and visible span
         freq_str = ""
         if self.frequency_hz > 0:
             freq_str = f"{self.frequency_hz / 1e6:.3f}"
+        sample_rate = self.iq_client.sample_rate if self.iq_client.sample_rate > 0 else 192000
+        span_khz = sample_rate * self._spectrum_zoom / 1000
+        span_str = f"Span: {span_khz:.0f} kHz"
 
         w.update(
-            f"  {line}\n"
+            f"{indented}\n"
             f"  {marker_line}\n"
-            f"  {'':>{center - len(freq_str)//2}}{freq_str}"
+            f"  {'':>{center - len(freq_str)//2}}{freq_str}{'':>{max(1, width - center - len(freq_str)//2 - len(span_str))}}{span_str}"
         )
 
     def _update_audio_info(self):
@@ -278,23 +298,34 @@ class DemodApp(App):
 
         # Buffer fill
         fill_pct = int(self.audio.buffer_fill * 100)
+        buf_bar = "█" * (fill_pct // 5) + "░" * (20 - fill_pct // 5)
         underruns = self.audio.underruns
 
+        peak_bar = s_meter_bar(self.peak_db, width=20, min_db=-120.0, max_db=-20.0)
+        with self._s_lock:
+            s_unit = self._s_unit
+            s_raw = self._s_raw
+        # SM raw value 0-22 maps to S0-S9+60
+        s_frac = max(0.0, min(1.0, s_raw / 22.0))
+        s_filled = int(s_frac * 20)
+        s_bar = "█" * s_filled + "░" * (20 - s_filled)
+
         text = (
-            f"  Vol: {vol_bar} {vol_pct}%{mute_str}    "
-            f"AGC: {agc_str} ({agc_gain_db:+.0f} dB)\n"
-            f"  Audio: [{level_bar}] {level_db:.0f} dB    "
-            f"Buf: {fill_pct}%  Underruns: {underruns}"
+            f"{'    Vol: [' + vol_bar + '] ' + str(vol_pct) + '%' + mute_str:<46s}"
+            f"AGC:  {agc_str} ({agc_gain_db:+.0f} dB)\n"
+            f"{'  Audio: [' + level_bar + '] ' + f'{level_db:.0f} dB':<46s}"
+            f"{'Buf: [' + buf_bar + '] ' + f'{fill_pct}%  Underruns: {underruns}'}\n"
+            f"{'   Peak: [' + peak_bar + '] ' + f'{self.peak_db:.1f} dBFS':<46s}"
+            f"  S: [{s_bar}] {s_unit}"
         )
         w.update(text)
 
     def _update_signal_info(self):
-        w = self.query_one("#signal-info", Static)
-        w.update(f"  Peak: {self.peak_db:.1f} dBFS    Samples: {self.sample_count}")
+        pass
 
     def _update_status(self):
         bar = self.query_one("#status-bar", Static)
-        bar.update("  c:Connect  d:Disc  r:Recon  m:Mute  a:AGC  +/-:Vol  \\[/]:BW")
+        bar.update("  c:Connect  d:Disc  r:Recon  m:Mute  a:AGC  +/-:Vol  \\[/]:BW  S-←/→:Zoom")
 
     # --- IQ data callback (from network thread) ---
 
@@ -333,6 +364,11 @@ class DemodApp(App):
         freq = self.cat_client.get_frequency()
         if freq is not None:
             self.call_from_thread(self._apply_cat_update, freq)
+        # Poll S-meter
+        sm = self.cat_client.get_s_meter()
+        if sm is not None:
+            with self._s_lock:
+                self._s_unit, self._s_raw = sm
 
     def _apply_cat_update(self, freq):
         changed = (freq != self.frequency_hz)
@@ -434,6 +470,14 @@ class DemodApp(App):
         """Decrease demodulation bandwidth by 500 Hz."""
         self.demod.set_bandwidth(max(100, self.demod.bandwidth - 500))
         self._update_radio_info()
+
+    def action_zoom_in(self):
+        """Zoom into the spectrum (halve visible span)."""
+        self._spectrum_zoom = max(1 / 64, self._spectrum_zoom / 2)
+
+    def action_zoom_out(self):
+        """Zoom out of the spectrum (double visible span)."""
+        self._spectrum_zoom = min(1.0, self._spectrum_zoom * 2)
 
     def on_unmount(self):
         self.audio.stop()

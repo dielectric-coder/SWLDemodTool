@@ -81,3 +81,27 @@ class CATClient:
             except IndexError:
                 pass
         return None
+
+    # SM command value -> S-unit string mapping (from FDM-DUO manual)
+    _SM_TO_S = {
+        0: "S0", 2: "S1", 3: "S2", 4: "S3", 5: "S4", 6: "S5",
+        8: "S6", 9: "S7", 10: "S8", 11: "S9", 12: "S9+10",
+        14: "S9+20", 16: "S9+30", 18: "S9+40", 20: "S9+50", 22: "S9+60",
+    }
+
+    def get_s_meter(self):
+        """Query S-meter via SM command. Returns (s_unit_str, raw_value) or None."""
+        resp = self.send_command("SM0;")
+        if resp and resp.startswith("SM0") and len(resp) >= 7:
+            try:
+                raw = int(resp[3:7])
+                # Find closest matching S-unit
+                best_key = 0
+                for key in self._SM_TO_S:
+                    if key <= raw:
+                        best_key = key
+                s_unit = self._SM_TO_S.get(best_key, "S0")
+                return s_unit, raw
+            except ValueError:
+                pass
+        return None

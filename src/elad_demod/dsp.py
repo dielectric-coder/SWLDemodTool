@@ -22,16 +22,44 @@ def compute_spectrum_db(iq_samples, fft_size=4096):
     return db.astype(np.float32)
 
 
-def spectrum_to_sparkline(db_values, width=60, min_db=-120.0, max_db=-20.0):
-    """Convert dB spectrum to a Unicode sparkline string."""
+def spectrum_to_sparkline(db_values, width=60, height=5, min_db=-120.0, max_db=-20.0):
+    """Convert dB spectrum to a multi-row Unicode bar chart.
+
+    Each column is drawn bottom-up using block characters across *height* rows.
+    """
     blocks = " ▁▂▃▄▅▆▇█"
     n_blocks = len(blocks) - 1
 
-    indices = np.linspace(0, len(db_values) - 1, width).astype(int)
-    resampled = db_values[indices]
+    # Peak-hold downsampling: take the max in each bin range so narrow
+    # signals (carriers, spurs) are not lost between sample points.
+    n = len(db_values)
+    if width > n:
+        # Fewer data points than columns: interpolate up
+        indices = np.linspace(0, n - 1, width).astype(int)
+        resampled = db_values[indices]
+    else:
+        edges = np.linspace(0, n, width + 1).astype(int)
+        resampled = np.array([np.max(db_values[edges[i]:edges[i+1]])
+                              for i in range(width)], dtype=np.float32)
     normalized = np.clip((resampled - min_db) / (max_db - min_db), 0.0, 1.0)
 
-    return "".join(blocks[int(v * n_blocks)] for v in normalized)
+    # Total sub-steps across all rows (each row has n_blocks sub-steps)
+    total_steps = height * n_blocks
+    fills = (normalized * total_steps).astype(int)
+
+    rows = []
+    for row in range(height - 1, -1, -1):  # top row first
+        line = []
+        for col in range(width):
+            cell_fill = fills[col] - row * n_blocks
+            if cell_fill >= n_blocks:
+                line.append(blocks[n_blocks])  # full block
+            elif cell_fill > 0:
+                line.append(blocks[cell_fill])
+            else:
+                line.append(blocks[0])  # space
+        rows.append("".join(line))
+    return "\n".join(rows)
 
 
 # ---------------------------------------------------------------------------
