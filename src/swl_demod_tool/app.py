@@ -10,7 +10,8 @@ from collections import deque
 from datetime import datetime, timezone
 
 from textual.app import App
-from textual.widgets import Footer, Static
+from textual.containers import Horizontal
+from textual.widgets import Footer, Input, Static
 from textual.reactive import reactive
 from textual import work
 from rich.text import Text
@@ -55,6 +56,33 @@ Screen {
     color: #769ff0;
     padding: 0 2;
     border-bottom: solid #394260;
+}
+
+#freq-bar {
+    height: 1;
+    background: black;
+    padding: 0 2;
+}
+
+#freq-bar Static {
+    width: 8;
+    color: #a3aed2;
+}
+
+#freq-bar Input {
+    width: 1fr;
+    height: 1;
+    background: black;
+    color: #769ff0;
+    border: none;
+}
+
+#freq-bar Input:focus {
+    border: none;
+}
+
+#freq-bar Input.-placeholder {
+    color: #a3aed2 50%;
 }
 
 #spectrum-display {
@@ -119,12 +147,16 @@ class DemodApp(App):
         ("left_square_bracket", "bw_down", "BW-"),
         ("shift+right", "zoom_in", "Zoom+"),
         ("shift+left", "zoom_out", "Zoom-"),
+        ("right", "tune_up", "Tune+"),
+        ("left", "tune_down", "Tune-"),
+        ("slash", "focus_freq", "Freq"),
     ]
 
     utc_display = reactive("--:-- UTC")
     frequency_hz = reactive(0)
     mode_str = reactive("---")
     peak_db = reactive(-120.0)
+    tune_step = reactive(1000)  # Fine tune step in Hz
 
     def __init__(self, host="localhost", iq_port=4533, cat_port=4532,
                  audio_device="default"):
@@ -158,6 +190,9 @@ class DemodApp(App):
         yield Static(id="title-bar")
         yield Static(id="conn-status")
         yield Static(id="radio-info")
+        with Horizontal(id="freq-bar"):
+            yield Static("  Tune: ")
+            yield Input(placeholder="kHz", id="freq-input")
         yield Static(id="spectrum-display")
         yield Static(id="audio-info")
         yield Static(id="status-bar", markup=True)
@@ -314,7 +349,7 @@ class DemodApp(App):
 
     def _update_status(self):
         bar = self.query_one("#status-bar", Static)
-        bar.update("  c:Connect  d:Disc  r:Recon  m:Mute  a:AGC  +/-:Vol  \\[/]:BW  S-←/→:Zoom")
+        bar.update("  c:Connect  d:Disc  r:Recon  m:Mute  a:AGC  +/-:Vol  \\[/]:BW  ←/→:Tune  S-←/→:Zoom  /:Freq")
 
     # --- IQ data callback (from network thread) ---
 
@@ -467,6 +502,59 @@ class DemodApp(App):
     def action_zoom_out(self):
         """Zoom out of the spectrum (double visible span)."""
         self._spectrum_zoom = min(1.0, self._spectrum_zoom * 2)
+
+    def action_focus_freq(self):
+        """Focus the frequency input field."""
+        self.query_one("#freq-input", Input).focus()
+
+    def action_tune_up(self):
+        """Fine tune up by tune_step Hz."""
+        self._tune_offset(self.tune_step)
+
+    def action_tune_down(self):
+        """Fine tune down by tune_step Hz."""
+        self._tune_offset(-self.tune_step)
+
+    def _tune_offset(self, offset_hz):
+        """Tune the radio by an offset from current frequency."""
+        if not self.cat_client.connected or self.frequency_hz <= 0:
+            return
+        new_freq = self.frequency_hz + offset_hz
+        if new_freq < 0:
+            return
+        self._do_tune(new_freq)
+
+    @work(thread=True)
+    def _do_tune(self, freq_hz):
+        """Send tune command to radio in a worker thread."""
+        if self.cat_client.set_frequency(freq_hz):
+            self.call_from_thread(self._apply_tune, freq_hz)
+
+    def _apply_tune(self, freq_hz):
+        self.frequency_hz = freq_hz
+        self._update_radio_info()
+
+    def on_input_submitted(self, event):
+        """Handle frequency input submission."""
+        if event.input.id == "freq-input":
+            value = event.input.value.strip()
+            if not value:
+                return
+            try:
+                freq_khz = float(value)
+                freq_hz = int(freq_khz * 1000)
+            except ValueError:
+                return
+            if freq_hz > 0 and self.cat_client.connected:
+                self._do_tune(freq_hz)
+            event.input.value = ""
+            self.set_focus(None)
+
+    def check_action(self, action, parameters):
+        """Suppress most keybindings while typing in the frequency input."""
+        if isinstance(self.focused, Input) and action not in ("quit",):
+            return None
+        return True
 
     def on_unmount(self):
         self.audio.stop()

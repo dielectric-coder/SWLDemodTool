@@ -80,6 +80,12 @@ class CATClient:
                     pass
         return freq, mode
 
+    def set_frequency(self, freq_hz):
+        """Set frequency via FA command. freq_hz is an integer in Hz."""
+        freq_str = f"FA{int(freq_hz):011d};"
+        resp = self.send_command(freq_str)
+        return resp is not None
+
     def get_frequency(self):
         """Query frequency via IF command. Returns Hz or None."""
         freq, _ = self.get_info()
