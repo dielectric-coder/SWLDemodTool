@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Elad Demod - TUI demodulator for Elad FDM-DUO IQ stream."""
+"""SWL Demod Tool - TUI demodulator for Elad FDM-DUO IQ stream."""
 
 import argparse
 import os
@@ -15,12 +15,12 @@ from textual.reactive import reactive
 from textual import work
 from rich.text import Text
 
-from elad_demod import __version__
-from elad_demod.config import load_config
-from elad_demod.iq_client import IQClient
-from elad_demod.cat_client import CATClient
-from elad_demod.dsp import compute_spectrum_db, spectrum_to_sparkline, Demodulator
-from elad_demod.audio import AudioOutput
+from swl_demod_tool import __version__
+from swl_demod_tool.config import load_config
+from swl_demod_tool.iq_client import IQClient
+from swl_demod_tool.cat_client import CATClient
+from swl_demod_tool.dsp import compute_spectrum_db, spectrum_to_sparkline, Demodulator
+from swl_demod_tool.audio import AudioOutput
 
 SPECTRUM_AVG = 3
 FFT_SIZE = 4096
@@ -102,7 +102,7 @@ def s_meter_bar(level_db, width=20, min_db=-120.0, max_db=-20.0):
 
 
 class DemodApp(App):
-    TITLE = f"Elad Demod v{__version__}"
+    TITLE = f"SWL Demod Tool v{__version__}"
     CSS = CSS
     theme = "tokyo-night"
     BINDINGS = [
@@ -167,7 +167,7 @@ class DemodApp(App):
         try:
             fd = os.open("/dev/tty", os.O_WRONLY)
             try:
-                os.write(fd, f"\033]0;Elad Demod v{__version__}\007".encode())
+                os.write(fd, f"\033]0;SWL Demod Tool v{__version__}\007".encode())
             finally:
                 os.close(fd)
         except OSError:
@@ -200,7 +200,7 @@ class DemodApp(App):
 
     def _update_title(self):
         bar = self.query_one("#title-bar", Static)
-        bar.update(f"  Elad Demod v{__version__}     {self.utc_display}")
+        bar.update(f"  SWL Demod Tool v{__version__}     {self.utc_display}")
 
     def _update_conn_status(self):
         w = self.query_one("#conn-status", Static)
@@ -475,12 +475,12 @@ class DemodApp(App):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Elad Demod - TUI IQ demodulator")
+    parser = argparse.ArgumentParser(description="SWL Demod Tool - TUI IQ demodulator")
     parser.add_argument("--host", default=None, help="Server host (default: from config)")
     parser.add_argument("--iq-port", type=int, default=None, help="IQ server port")
     parser.add_argument("--cat-port", type=int, default=None, help="CAT server port")
     parser.add_argument("--audio-device", default=None, help="Audio output device")
-    parser.add_argument("--version", action="version", version=f"elad-demod {__version__}")
+    parser.add_argument("--version", action="version", version=f"swl-demod {__version__}")
     args = parser.parse_args()
 
     config = load_config()

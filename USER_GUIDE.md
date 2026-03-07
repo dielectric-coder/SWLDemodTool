@@ -1,4 +1,4 @@
-# Elad Demod - User Guide
+# SWL Demod Tool - User Guide
 
 TUI demodulator for the Elad FDM-DUO software-defined radio.
 
@@ -11,21 +11,21 @@ TUI demodulator for the Elad FDM-DUO software-defined radio.
 ## Installation
 
 ```bash
-pip install elad-demod
+pip install swl-demod-tool
 ```
 
 Or from source:
 
 ```bash
-git clone https://github.com/mikewam/elad-demod.git
-cd elad-demod
+git clone https://github.com/dielectric-coder/EladDemod.git
+cd EladDemod
 pip install -e .
 ```
 
 ## Running
 
 ```bash
-elad-demod
+swl-demod
 ```
 
 The app auto-connects on startup to `localhost:4533` (IQ) and `localhost:4532` (CAT).
@@ -58,12 +58,12 @@ The app auto-connects on startup to `localhost:4533` (IQ) and `localhost:4532` (
 ## Display Layout
 
 ```
-  Elad Demod v0.1.0     12:34:56 UTC
+  SWL Demod Tool v0.1.0     12:34:56 UTC
     IQ ● localhost:4533  192000 Hz 32-bit IQ
    CAT ● localhost:4532
  Audio ● 48000 Hz
   Frequency: 7.100000 MHz    Mode: USB    BW: 3000 Hz
-  ▁▁▁▂▂▃▅▇█▇▅▃▂▂▁▁▁   (9-row spectrum graph)
+  ▁▁▂▂▃▅▇█▇▅▃▂▂▁▁▁   (9-row spectrum graph)
                   ↑
                7.100          Span: 192 kHz
     Vol: [████████████░░░░░░░░]  60%        AGC:  ON  (+40 dB)
@@ -93,7 +93,7 @@ The S-meter reads signal strength directly from the radio via CAT command (`SM0;
 
 ## Configuration
 
-Configuration is stored at `$XDG_CONFIG_HOME/elad-demod/config.conf` (typically `~/.config/elad-demod/config.conf`).
+Configuration is stored at `$XDG_CONFIG_HOME/swl-demod-tool/config.conf` (typically `~/.config/swl-demod-tool/config.conf`).
 
 ```ini
 [server]

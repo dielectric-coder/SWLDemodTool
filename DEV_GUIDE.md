@@ -1,9 +1,9 @@
-# Elad Demod - Developer Guide
+# SWL Demod Tool - Developer Guide
 
 ## Project Structure
 
 ```
-src/elad_demod/
+src/swl_demod_tool/
     __init__.py       # Version string
     app.py            # Textual TUI application (entry point: main())
     iq_client.py      # TCP client for IQ sample stream
@@ -112,7 +112,7 @@ pip install -e .
 ## Running
 
 ```bash
-elad-demod --host <server-ip>
+swl-demod --host <server-ip>
 ```
 
 Requires an Elad Spectrum IQ+CAT server (e.g., from [EladSpectrum](https://github.com/mikewam/EladSpectrum)).

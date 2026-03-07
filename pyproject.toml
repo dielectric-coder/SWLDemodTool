@@ -3,7 +3,7 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "elad-demod"
+name = "swl-demod-tool"
 version = "0.1.0"
 description = "TUI demodulator for Elad FDM-DUO IQ stream"
 license = "GPL-3.0-or-later"
@@ -11,7 +11,7 @@ requires-python = ">=3.10"
 authors = [
     { name = "Michel Lachaine", email = "mike@mikelachaine.ca" },
 ]
-keywords = ["sdr", "radio", "demodulator", "elad", "fdm-duo", "iq", "tui"]
+keywords = ["sdr", "radio", "demodulator", "elad", "fdm-duo", "iq", "tui", "swl"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
@@ -29,10 +29,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/mikewam/elad-demod"
+Homepage = "https://github.com/dielectric-coder/EladDemod"
 
 [project.scripts]
-elad-demod = "elad_demod.app:main"
+swl-demod = "swl_demod_tool.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

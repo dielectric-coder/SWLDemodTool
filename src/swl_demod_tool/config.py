@@ -2,7 +2,7 @@ import os
 import configparser
 
 CONFIG_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME",
-                          os.path.expanduser("~/.config")), "elad-demod")
+                          os.path.expanduser("~/.config")), "swl-demod-tool")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.conf")
 
 DEFAULTS = {

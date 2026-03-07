@@ -38,4 +38,4 @@
 - Audio output via sounddevice with ring buffer
 - Unicode sparkline spectrum display
 - Keybindings: connect/disconnect, mute, AGC, volume, bandwidth
-- Configuration via `$XDG_CONFIG_HOME/elad-demod/config.conf`
+- Configuration via `$XDG_CONFIG_HOME/swl-demod-tool/config.conf`

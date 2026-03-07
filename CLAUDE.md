@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-TUI demodulator for the Elad FDM-DUO software-defined radio. Connects to an IQ sample server and CAT control server over TCP, demodulates AM audio, and displays a live spectrum in the terminal using Textual.
+SWL Demod Tool — TUI demodulator for the Elad FDM-DUO software-defined radio. Connects to an IQ sample server and CAT control server over TCP, demodulates AM audio, and displays a live spectrum in the terminal using Textual.
 
 ## Commands
 
@@ -13,8 +13,8 @@ TUI demodulator for the Elad FDM-DUO software-defined radio. Connects to an IQ s
 pip install -e .
 
 # Run the app
-elad-demod
-elad-demod --host 192.168.1.10 --iq-port 4533 --cat-port 4532 --audio-device default
+swl-demod
+swl-demod --host 192.168.1.10 --iq-port 4533 --cat-port 4532 --audio-device default
 
 # No tests exist yet. No linter is configured.
 ```
@@ -30,7 +30,7 @@ Real-time data pipeline: **IQ network stream -> DSP -> audio output**, with a Te
 - **`cat_client.py`** — TCP client for CAT control. Kenwood-style commands (`;`-terminated). Parses `IF;` for frequency/mode, `SM0;` for S-meter (hardware S-unit values S0-S9+60).
 - **`dsp.py`** — FFT spectrum (Blackman window, 4096-point), multi-row Unicode bar chart with peak-hold downsampling, and `Demodulator` class (FIR lowpass -> decimate -> AM envelope -> DC removal -> AGC).
 - **`audio.py`** — `sounddevice` OutputStream with manual ring buffer. Handles underruns with silence.
-- **`config.py`** — INI config via `configparser` at `$XDG_CONFIG_HOME/elad-demod/config.conf`.
+- **`config.py`** — INI config via `configparser` at `$XDG_CONFIG_HOME/swl-demod-tool/config.conf`.
 
 ### Threading Model
 
