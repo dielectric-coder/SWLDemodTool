@@ -29,7 +29,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/dielectric-coder/EladDemod"
+Homepage = "https://github.com/dielectric-coder/SWLDemodTool"
 
 [project.scripts]
 swl-demod = "swl_demod_tool.app:main"

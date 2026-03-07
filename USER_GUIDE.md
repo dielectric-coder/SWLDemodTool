@@ -17,8 +17,8 @@ pip install swl-demod-tool
 Or from source:
 
 ```bash
-git clone https://github.com/dielectric-coder/EladDemod.git
-cd EladDemod
+git clone https://github.com/dielectric-coder/SWLDemodTool.git
+cd SWLDemodTool
 pip install -e .
 ```
 
