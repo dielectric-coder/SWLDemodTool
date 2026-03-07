@@ -1,5 +1,6 @@
 """TCP client for sending CAT commands to Elad Spectrum CAT server."""
 
+import bisect
 import socket
 import threading
 
@@ -57,37 +58,42 @@ class CATClient:
                 self.connected = False
                 return None
 
-    def get_frequency(self):
-        """Query frequency via IF command. Returns Hz or None."""
+    _MODE_MAP = {
+        "1": "LSB", "2": "USB", "3": "CW",
+        "4": "FM", "5": "AM", "7": "CW-R",
+    }
+
+    def get_info(self):
+        """Query IF command. Returns (frequency_hz, mode_str) or (None, None)."""
         resp = self.send_command("IF;")
+        freq = None
+        mode = None
         if resp and resp.startswith("IF") and len(resp) >= 16:
             try:
-                return int(resp[2:13])
+                freq = int(resp[2:13])
             except ValueError:
                 pass
-        return None
+            if len(resp) >= 30:
+                try:
+                    mode = self._MODE_MAP.get(resp[29], f"?{resp[29]}")
+                except IndexError:
+                    pass
+        return freq, mode
+
+    def get_frequency(self):
+        """Query frequency via IF command. Returns Hz or None."""
+        freq, _ = self.get_info()
+        return freq
 
     def get_mode(self):
         """Query mode from IF response. Returns mode string or None."""
-        resp = self.send_command("IF;")
-        if resp and resp.startswith("IF") and len(resp) >= 30:
-            mode_map = {
-                "1": "LSB", "2": "USB", "3": "CW",
-                "4": "FM", "5": "AM", "7": "CW-R",
-            }
-            try:
-                mode_code = resp[29]
-                return mode_map.get(mode_code, f"?{mode_code}")
-            except IndexError:
-                pass
-        return None
+        _, mode = self.get_info()
+        return mode
 
     # SM command value -> S-unit string mapping (from FDM-DUO manual)
-    _SM_TO_S = {
-        0: "S0", 2: "S1", 3: "S2", 4: "S3", 5: "S4", 6: "S5",
-        8: "S6", 9: "S7", 10: "S8", 11: "S9", 12: "S9+10",
-        14: "S9+20", 16: "S9+30", 18: "S9+40", 20: "S9+50", 22: "S9+60",
-    }
+    _SM_KEYS = [0, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 14, 16, 18, 20, 22]
+    _SM_VALS = ["S0", "S1", "S2", "S3", "S4", "S5", "S6", "S7",
+                "S8", "S9", "S9+10", "S9+20", "S9+30", "S9+40", "S9+50", "S9+60"]
 
     def get_s_meter(self):
         """Query S-meter via SM command. Returns (s_unit_str, raw_value) or None."""
@@ -95,12 +101,8 @@ class CATClient:
         if resp and resp.startswith("SM0") and len(resp) >= 7:
             try:
                 raw = int(resp[3:7])
-                # Find closest matching S-unit
-                best_key = 0
-                for key in self._SM_TO_S:
-                    if key <= raw:
-                        best_key = key
-                s_unit = self._SM_TO_S.get(best_key, "S0")
+                idx = bisect.bisect_right(self._SM_KEYS, raw) - 1
+                s_unit = self._SM_VALS[max(0, idx)]
                 return s_unit, raw
             except ValueError:
                 pass

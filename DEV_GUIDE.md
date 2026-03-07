@@ -51,6 +51,8 @@ Kenwood TS-480 compatible, semicolon-terminated ASCII commands over TCP.
 | `IF;`   | `IF...;`        | Frequency (chars 2-13), mode (char 29)   |
 | `SM0;`  | `SM0PPPP;`      | S-meter (4-digit value, see table below) |
 
+The `get_info()` method returns both frequency and mode from a single `IF;` call. S-meter lookup uses `bisect` for efficient mapping.
+
 **S-meter mapping (SM command P2 values):**
 
 | Value | S-Unit | Value | S-Unit |

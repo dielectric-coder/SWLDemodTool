@@ -73,10 +73,6 @@ Screen {
     border-bottom: solid #394260;
 }
 
-#signal-info {
-    height: 0;
-}
-
 #status-bar {
     dock: bottom;
     height: 1;
@@ -129,7 +125,6 @@ class DemodApp(App):
     frequency_hz = reactive(0)
     mode_str = reactive("---")
     peak_db = reactive(-120.0)
-    sample_count = reactive(0)
 
     def __init__(self, host="localhost", iq_port=4533, cat_port=4532,
                  audio_device="default"):
@@ -141,7 +136,6 @@ class DemodApp(App):
         self.iq_client = IQClient(host, iq_port)
         self.cat_client = CATClient(host, cat_port)
         self._spectrum_buf = deque(maxlen=SPECTRUM_AVG)
-        self._avg_spectrum = np.zeros(FFT_SIZE, dtype=np.float32)
         self._iq_lock = threading.Lock()
 
         # Demodulation and audio
@@ -166,15 +160,16 @@ class DemodApp(App):
         yield Static(id="radio-info")
         yield Static(id="spectrum-display")
         yield Static(id="audio-info")
-        yield Static(id="signal-info")
         yield Static(id="status-bar", markup=True)
         yield Footer()
 
     def on_mount(self):
         try:
             fd = os.open("/dev/tty", os.O_WRONLY)
-            os.write(fd, f"\033]0;Elad Demod v{__version__}\007".encode())
-            os.close(fd)
+            try:
+                os.write(fd, f"\033]0;Elad Demod v{__version__}\007".encode())
+            finally:
+                os.close(fd)
         except OSError:
             pass
         self._update_all()
@@ -189,7 +184,6 @@ class DemodApp(App):
         self._update_radio_info()
         self._update_spectrum()
         self._update_audio_info()
-        self._update_signal_info()
         self._update_status()
 
     def _tick(self):
@@ -203,7 +197,6 @@ class DemodApp(App):
         """Periodic UI refresh for fast-changing displays."""
         self._update_spectrum()
         self._update_audio_info()
-        self._update_signal_info()
 
     def _update_title(self):
         bar = self.query_one("#title-bar", Static)
@@ -243,7 +236,6 @@ class DemodApp(App):
 
         with self._iq_lock:
             avg = np.mean(list(self._spectrum_buf), axis=0)
-            self._avg_spectrum = avg
 
         # Zoom: slice the center portion of the FFT
         n = len(avg)
@@ -320,9 +312,6 @@ class DemodApp(App):
         )
         w.update(text)
 
-    def _update_signal_info(self):
-        pass
-
     def _update_status(self):
         bar = self.query_one("#status-bar", Static)
         bar.update("  c:Connect  d:Disc  r:Recon  m:Mute  a:AGC  +/-:Vol  \\[/]:BW  S-←/→:Zoom")
@@ -349,11 +338,10 @@ class DemodApp(App):
             # Push to audio output
             self.audio.write(audio)
 
-        self.call_from_thread(self._apply_iq_update, peak, len(iq_samples))
+        self.call_from_thread(self._apply_iq_update, peak)
 
-    def _apply_iq_update(self, peak, count):
+    def _apply_iq_update(self, peak):
         self.peak_db = peak
-        self.sample_count += count
 
     # --- CAT polling ---
 
@@ -361,23 +349,25 @@ class DemodApp(App):
     def _poll_cat(self):
         if not self.cat_client.connected:
             return
-        freq = self.cat_client.get_frequency()
+        # Single IF command for both frequency and mode
+        freq, mode = self.cat_client.get_info()
         if freq is not None:
-            self.call_from_thread(self._apply_cat_update, freq)
+            self.call_from_thread(self._apply_cat_update, freq, mode)
         # Poll S-meter
         sm = self.cat_client.get_s_meter()
         if sm is not None:
             with self._s_lock:
                 self._s_unit, self._s_raw = sm
+        # Update connection indicator if CAT dropped
+        if not self.cat_client.connected:
+            self.call_from_thread(self._update_conn_status)
 
-    def _apply_cat_update(self, freq):
+    def _apply_cat_update(self, freq, mode=None):
         changed = (freq != self.frequency_hz)
         self.frequency_hz = freq
-        if changed:
-            mode = self.cat_client.get_mode()
-            if mode:
-                self.mode_str = mode
-                self._auto_bandwidth(mode)
+        if changed and mode:
+            self.mode_str = mode
+            self._auto_bandwidth(mode)
             self._update_radio_info()
 
     def _auto_bandwidth(self, mode):
@@ -423,8 +413,7 @@ class DemodApp(App):
             self.cat_client.connect()
             self.call_from_thread(self._update_conn_status)
             if self.cat_client.connected:
-                freq = self.cat_client.get_frequency()
-                mode = self.cat_client.get_mode()
+                freq, mode = self.cat_client.get_info()
                 if freq:
                     self.call_from_thread(setattr, self, "frequency_hz", freq)
                 if mode:

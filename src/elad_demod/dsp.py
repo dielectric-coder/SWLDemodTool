@@ -49,16 +49,8 @@ def spectrum_to_sparkline(db_values, width=60, height=5, min_db=-120.0, max_db=-
 
     rows = []
     for row in range(height - 1, -1, -1):  # top row first
-        line = []
-        for col in range(width):
-            cell_fill = fills[col] - row * n_blocks
-            if cell_fill >= n_blocks:
-                line.append(blocks[n_blocks])  # full block
-            elif cell_fill > 0:
-                line.append(blocks[cell_fill])
-            else:
-                line.append(blocks[0])  # space
-        rows.append("".join(line))
+        cell_fills = np.clip(fills - row * n_blocks, 0, n_blocks)
+        rows.append("".join(blocks[c] for c in cell_fills))
     return "\n".join(rows)
 
 

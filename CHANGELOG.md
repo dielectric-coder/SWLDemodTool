@@ -19,6 +19,14 @@
 - AGC/Buf/S-meter displayed as a second column with aligned colons
 - Connection status panel shows IQ, CAT, Audio each on its own line
 
+### Fixed
+- Removed dead code: unused `#signal-info` CSS, `sample_count` reactive, `_avg_spectrum`, `_update_signal_info()`
+- Combined duplicate CAT `IF;` calls into single `get_info()` per poll cycle
+- CAT S-meter lookup uses bisect for O(log n) instead of linear scan
+- Vectorized sparkline inner loop (numpy `clip` replaces Python list comprehension)
+- Fixed file descriptor leak in TTY title escape sequence (added try/finally)
+- Added CAT disconnect detection when server drops connection
+
 ## [0.1.0] - 2026-03-07
 
 ### Added
