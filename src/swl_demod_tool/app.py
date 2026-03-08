@@ -10,7 +10,7 @@ from collections import deque
 from datetime import datetime, timezone
 
 from textual.app import App
-from textual.containers import Horizontal
+from textual.containers import Horizontal, Vertical
 from textual.widgets import Footer, Input, Static
 from textual.reactive import reactive
 from textual import work
@@ -59,14 +59,23 @@ Screen {
 }
 
 #freq-bar {
-    height: 1;
+    height: 2;
     background: black;
-    padding: 0 2;
+    padding: 0 1;
 }
 
-#freq-bar Static {
-    width: 8;
-    color: #a3aed2;
+#freq-prompt, #freq-b-prompt {
+    width: 28;
+    height: 2;
+}
+
+#freq-b-prompt {
+    margin-left: 1;
+}
+
+.prompt-char {
+    width: 4;
+    height: 1;
 }
 
 #freq-bar Input {
@@ -132,10 +141,23 @@ def s_meter_bar(level_db, width=20, min_db=-120.0, max_db=-20.0):
 class DemodApp(App):
     TITLE = f"SWL Demod Tool v{__version__}"
     CSS = CSS
+    AUTO_FOCUS = None
     theme = "tokyo-night"
+    FREQ_LABEL = (
+        "[#769ff0 on #394260]╭─[/]"
+        "[#a3aed2]░▒▓[/]"
+        "[#090c0c on #a3aed2]  VFO-A [/]"
+        "[#a3aed2 on black]\ue0b0[/]"
+    )
+    FREQ_B_LABEL = (
+        "[#769ff0 on #394260]╭─[/]"
+        "[#a3aed2]░▒▓[/]"
+        "[#090c0c on #a3aed2]  VFO-B [/]"
+        "[#a3aed2 on black]\ue0b0[/]"
+    )
     BINDINGS = [
         ("q", "quit", "Quit"),
-        ("escape", "quit", "Quit"),
+        ("escape", "unfocus", "Unfocus"),
         ("c", "connect", "Connect"),
         ("d", "disconnect", "Disconnect"),
         ("r", "reconnect", "Reconnect"),
@@ -150,11 +172,15 @@ class DemodApp(App):
         ("right", "tune_up", "Tune+"),
         ("left", "tune_down", "Tune-"),
         ("slash", "focus_freq", "Freq"),
+        ("x", "cycle_mode", "Mode"),
+        ("alt+right", "fine_tune_up", "Fine+"),
+        ("alt+left", "fine_tune_down", "Fine-"),
     ]
 
     utc_display = reactive("--:-- UTC")
     frequency_hz = reactive(0)
     mode_str = reactive("---")
+    active_vfo = reactive("--")
     peak_db = reactive(-120.0)
     tune_step = reactive(1000)  # Fine tune step in Hz
 
@@ -191,8 +217,16 @@ class DemodApp(App):
         yield Static(id="conn-status")
         yield Static(id="radio-info")
         with Horizontal(id="freq-bar"):
-            yield Static("  Tune: ")
-            yield Input(placeholder="kHz", id="freq-input")
+            with Vertical(id="freq-prompt"):
+                yield Static(self.FREQ_LABEL)
+                with Horizontal():
+                    yield Static("[#769ff0 on #394260]╰─\uf10c[/]", classes="prompt-char")
+                    yield Input(placeholder="kHz", id="freq-input")
+            with Vertical(id="freq-b-prompt"):
+                yield Static(self.FREQ_B_LABEL)
+                with Horizontal():
+                    yield Static("[#769ff0 on #394260]╰─\uf10c[/]", classes="prompt-char")
+                    yield Input(placeholder="kHz", id="freq-b-input")
         yield Static(id="spectrum-display")
         yield Static(id="audio-info")
         yield Static(id="status-bar", markup=True)
@@ -256,11 +290,12 @@ class DemodApp(App):
 
     def _update_radio_info(self):
         w = self.query_one("#radio-info", Static)
+        vfo = self.active_vfo
         if self.frequency_hz > 0:
             freq_mhz = self.frequency_hz / 1e6
-            text = f"  Frequency: {freq_mhz:.6f} MHz    Mode: {self.mode_str}    BW: {self.demod.bandwidth} Hz"
+            text = f"  VFO: {vfo}    Frequency: {freq_mhz:.6f} MHz    Mode: {self.mode_str}    BW: {self.demod.bandwidth} Hz"
         else:
-            text = f"  Frequency: ---    Mode: ---    BW: {self.demod.bandwidth} Hz"
+            text = f"  VFO: {vfo}    Frequency: ---    Mode: ---    BW: {self.demod.bandwidth} Hz"
         w.update(text)
 
     def _update_spectrum(self):
@@ -341,7 +376,7 @@ class DemodApp(App):
             f"{'    Vol: [' + vol_bar + '] ' + str(vol_pct) + '%' + mute_str:<46s}"
             f"AGC:  {agc_str} ({agc_gain_db:+.0f} dB)\n"
             f"{'  Audio: [' + level_bar + '] ' + f'{level_db:.0f} dB':<46s}"
-            f"{'Buf: [' + buf_bar + '] ' + f'{fill_pct}%  Underruns: {underruns}'}\n"
+            f"{'Buf: [' + buf_bar + '] ' + f'{fill_pct:2d}%  Underruns: {underruns}'}\n"
             f"{'   Peak: [' + peak_bar + '] ' + f'{self.peak_db:.1f} dBFS':<46s}"
             f"  S: [{s_bar}] {s_unit}"
         )
@@ -349,7 +384,7 @@ class DemodApp(App):
 
     def _update_status(self):
         bar = self.query_one("#status-bar", Static)
-        bar.update("  c:Connect  d:Disc  r:Recon  m:Mute  a:AGC  +/-:Vol  \\[/]:BW  ←/→:Tune  S-←/→:Zoom  /:Freq")
+        bar.update("  c:Connect  d:Disc  r:Recon  m:Mute  a:AGC  x:Mode  +/-:Vol  \\[/]:BW  ←/→:Tune  S-←/→:Zoom  /:Freq")
 
     # --- IQ data callback (from network thread) ---
 
@@ -388,6 +423,10 @@ class DemodApp(App):
         freq, mode = self.cat_client.get_info()
         if freq is not None:
             self.call_from_thread(self._apply_cat_update, freq, mode)
+        # Poll active VFO
+        vfo = self.cat_client.get_active_vfo()
+        if vfo is not None:
+            self.call_from_thread(setattr, self, "active_vfo", vfo)
         # Poll S-meter
         sm = self.cat_client.get_s_meter()
         if sm is not None:
@@ -406,7 +445,7 @@ class DemodApp(App):
             self._update_radio_info()
 
     def _auto_bandwidth(self, mode):
-        """Set demodulation bandwidth based on radio mode."""
+        """Set demodulation bandwidth and mode based on radio mode."""
         bw_map = {
             "AM": 5000,
             "LSB": 3000,
@@ -415,9 +454,21 @@ class DemodApp(App):
             "CW-R": 500,
             "FM": 6000,
         }
+        mode_map = {
+            "AM": "AM",
+            "LSB": "LSB",
+            "USB": "USB",
+            "CW": "USB",
+            "CW-R": "LSB",
+            "FM": "AM",
+        }
         bw = bw_map.get(mode)
         if bw:
             self.demod.set_bandwidth(bw)
+        demod_mode = mode_map.get(mode, "AM")
+        if demod_mode != self.demod.mode:
+            self.demod.mode = demod_mode
+            self.demod.reset()
 
     # --- Actions ---
 
@@ -454,6 +505,9 @@ class DemodApp(App):
                 if mode:
                     self.call_from_thread(setattr, self, "mode_str", mode)
                     self.call_from_thread(self._auto_bandwidth, mode)
+                vfo = self.cat_client.get_active_vfo()
+                if vfo:
+                    self.call_from_thread(setattr, self, "active_vfo", vfo)
                 self.call_from_thread(self._update_radio_info)
 
     def action_disconnect(self):
@@ -476,6 +530,15 @@ class DemodApp(App):
     def action_toggle_agc(self):
         self.demod._agc_enabled = not self.demod._agc_enabled
         self._update_audio_info()
+
+    def action_cycle_mode(self):
+        """Cycle demodulation mode: AM → USB → LSB → AM."""
+        modes = ["AM", "USB", "LSB"]
+        idx = modes.index(self.demod.mode) if self.demod.mode in modes else 0
+        self.demod.mode = modes[(idx + 1) % len(modes)]
+        self.demod.reset()
+        self.mode_str = self.demod.mode
+        self._update_radio_info()
 
     def action_volume_up(self):
         self.demod.volume = min(1.0, self.demod.volume + 0.05)
@@ -515,6 +578,14 @@ class DemodApp(App):
         """Fine tune down by tune_step Hz."""
         self._tune_offset(-self.tune_step)
 
+    def action_fine_tune_up(self):
+        """Fine tune up by 100 Hz."""
+        self._tune_offset(100)
+
+    def action_fine_tune_down(self):
+        """Fine tune down by 100 Hz."""
+        self._tune_offset(-100)
+
     def _tune_offset(self, offset_hz):
         """Tune the radio by an offset from current frequency."""
         if not self.cat_client.connected or self.frequency_hz <= 0:
@@ -534,6 +605,11 @@ class DemodApp(App):
         self.frequency_hz = freq_hz
         self._update_radio_info()
 
+    @work(thread=True)
+    def _do_tune_b(self, freq_hz):
+        """Send VFO-B tune command to radio in a worker thread."""
+        self.cat_client.set_frequency_b(freq_hz)
+
     def on_input_submitted(self, event):
         """Handle frequency input submission."""
         if event.input.id == "freq-input":
@@ -549,12 +625,29 @@ class DemodApp(App):
                 self._do_tune(freq_hz)
             event.input.value = ""
             self.set_focus(None)
+        elif event.input.id == "freq-b-input":
+            value = event.input.value.strip()
+            if not value:
+                return
+            try:
+                freq_khz = float(value)
+                freq_hz = int(freq_khz * 1000)
+            except ValueError:
+                return
+            if freq_hz > 0 and self.cat_client.connected:
+                self._do_tune_b(freq_hz)
+            event.input.value = ""
+            self.set_focus(None)
 
     def check_action(self, action, parameters):
         """Suppress most keybindings while typing in the frequency input."""
-        if isinstance(self.focused, Input) and action not in ("quit",):
+        if isinstance(self.focused, Input) and action not in ("quit", "unfocus"):
             return None
         return True
+
+    def action_unfocus(self):
+        """Remove focus from any focused widget."""
+        self.set_focus(None)
 
     def on_unmount(self):
         self.audio.stop()

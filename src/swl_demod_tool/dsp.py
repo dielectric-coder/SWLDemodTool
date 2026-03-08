@@ -59,9 +59,10 @@ def spectrum_to_sparkline(db_values, width=60, height=5, min_db=-120.0, max_db=-
 # ---------------------------------------------------------------------------
 
 class Demodulator:
-    """AM demodulator with decimation, DC removal, and AGC.
+    """AM/SSB demodulator with decimation, DC removal, and AGC.
 
-    Pipeline: IQ (192 kHz) → lowpass → decimate (÷4) → envelope → DC remove → AGC → audio (48 kHz)
+    Pipeline: IQ (192 kHz) → lowpass → decimate (÷4) → detect → DC remove → AGC → audio (48 kHz)
+    Detection: AM = envelope (magnitude), USB/LSB = product detector (real part).
     """
 
     def __init__(self, iq_sample_rate=192000, audio_rate=48000, bandwidth=5000):
@@ -69,6 +70,7 @@ class Demodulator:
         self.audio_rate = audio_rate
         self.decimation = iq_sample_rate // audio_rate  # 4
         self.bandwidth = bandwidth
+        self.mode = "AM"  # "AM", "USB", "LSB"
 
         # Design lowpass FIR filter for anti-alias before decimation
         # Cutoff at bandwidth relative to Nyquist (iq_sample_rate/2)
@@ -105,7 +107,7 @@ class Demodulator:
         self._lp_zi_q = lfilter_zi(self._lp_taps, 1.0).astype(np.float32) * 0
 
     def process(self, iq_samples):
-        """Demodulate AM from complex IQ samples.
+        """Demodulate AM/SSB from complex IQ samples.
 
         Returns float32 audio array at audio_rate, or empty array if input too short.
         """
@@ -124,13 +126,18 @@ class Demodulator:
         i_dec = i_filt[::self.decimation]
         q_dec = q_filt[::self.decimation]
 
-        # AM envelope detection: magnitude
-        envelope = np.sqrt(i_dec ** 2 + q_dec ** 2)
+        # Detection
+        if self.mode in ("USB", "LSB"):
+            # SSB product detector: real part of the complex baseband signal
+            detected = i_dec.astype(np.float32)
+        else:
+            # AM envelope detection: magnitude
+            detected = np.sqrt(i_dec ** 2 + q_dec ** 2)
 
         # DC removal (block-based: subtract smoothed mean)
-        block_mean = np.mean(envelope)
+        block_mean = np.mean(detected)
         self._dc_avg = self._dc_alpha * self._dc_avg + (1 - self._dc_alpha) * block_mean
-        audio = envelope - self._dc_avg
+        audio = detected - self._dc_avg
 
         # AGC (block-based for speed)
         if self._agc_enabled:

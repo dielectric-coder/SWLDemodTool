@@ -64,37 +64,60 @@ class CATClient:
     }
 
     def get_info(self):
-        """Query IF command. Returns (frequency_hz, mode_str) or (None, None)."""
-        resp = self.send_command("IF;")
-        freq = None
-        mode = None
-        if resp and resp.startswith("IF") and len(resp) >= 16:
-            try:
-                freq = int(resp[2:13])
-            except ValueError:
-                pass
-            if len(resp) >= 30:
-                try:
-                    mode = self._MODE_MAP.get(resp[29], f"?{resp[29]}")
-                except IndexError:
-                    pass
+        """Query VFO-A frequency and mode. Returns (frequency_hz, mode_str) or (None, None)."""
+        freq = self.get_vfo_a_freq()
+        mode = self._get_mode_from_if()
         return freq, mode
 
+    def get_vfo_a_freq(self):
+        """Query VFO-A frequency via FA command. Returns Hz or None."""
+        resp = self.send_command("FA;")
+        if resp and resp.startswith("FA") and len(resp) >= 13:
+            try:
+                return int(resp[2:13])
+            except ValueError:
+                pass
+        return None
+
+    def _get_mode_from_if(self):
+        """Query mode from IF response. Returns mode string or None."""
+        resp = self.send_command("IF;")
+        if resp and resp.startswith("IF") and len(resp) >= 30:
+            try:
+                return self._MODE_MAP.get(resp[29], f"?{resp[29]}")
+            except IndexError:
+                pass
+        return None
+
+    def get_active_vfo(self):
+        """Query active receive VFO via FR command. Returns 'A' or 'B', or None."""
+        resp = self.send_command("FR;")
+        if resp and resp.startswith("FR") and len(resp) >= 4:
+            if resp[2] == "0":
+                return "A"
+            elif resp[2] == "1":
+                return "B"
+        return None
+
     def set_frequency(self, freq_hz):
-        """Set frequency via FA command. freq_hz is an integer in Hz."""
+        """Set VFO-A frequency via FA command. freq_hz is an integer in Hz."""
         freq_str = f"FA{int(freq_hz):011d};"
         resp = self.send_command(freq_str)
         return resp is not None
 
+    def set_frequency_b(self, freq_hz):
+        """Set VFO-B frequency via FB command. freq_hz is an integer in Hz."""
+        freq_str = f"FB{int(freq_hz):011d};"
+        resp = self.send_command(freq_str)
+        return resp is not None
+
     def get_frequency(self):
-        """Query frequency via IF command. Returns Hz or None."""
-        freq, _ = self.get_info()
-        return freq
+        """Query VFO-A frequency. Returns Hz or None."""
+        return self.get_vfo_a_freq()
 
     def get_mode(self):
         """Query mode from IF response. Returns mode string or None."""
-        _, mode = self.get_info()
-        return mode
+        return self._get_mode_from_if()
 
     # SM command value -> S-unit string mapping (from FDM-DUO manual)
     _SM_KEYS = [0, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 14, 16, 18, 20, 22]
