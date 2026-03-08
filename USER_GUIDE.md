@@ -60,7 +60,7 @@ The app auto-connects on startup to `localhost:4533` (IQ) and `localhost:4532` (
 | `]` / `[`       | Increase / decrease demod bandwidth |
 | `→` / `←`       | Tune up / down (1 kHz steps)        |
 | `Alt+→` / `Alt+←` | Fine tune (100 Hz steps)         |
-| `/`             | Direct frequency entry (kHz)        |
+| `/`             | Direct frequency entry (kHz, tunes active VFO) |
 | `Shift+→`       | Zoom into spectrum                  |
 | `Shift+←`       | Zoom out of spectrum                |
 | `q`             | Quit                                |
@@ -70,6 +70,7 @@ The app auto-connects on startup to `localhost:4533` (IQ) and `localhost:4532` (
 
 ```
   SWL Demod Tool v0.3.0     12:34:56 UTC
+  ╭─░▒▓  Freq ► ╰─⏺ [kHz]
     IQ ● localhost:4533  192000 Hz 32-bit IQ
    CAT ● localhost:4532
  Audio ● 48000 Hz

@@ -63,15 +63,12 @@ Screen {
     height: 2;
     background: black;
     padding: 0 1;
+    align-horizontal: center;
 }
 
-#freq-prompt, #freq-b-prompt {
+#freq-prompt {
     width: 28;
     height: 2;
-}
-
-#freq-b-prompt {
-    margin-left: 1;
 }
 
 .prompt-char {
@@ -147,13 +144,7 @@ class DemodApp(App):
     FREQ_LABEL = (
         "[#769ff0 on #394260]╭─[/]"
         "[#a3aed2]░▒▓[/]"
-        "[#090c0c on #a3aed2]  VFO-A [/]"
-        "[#a3aed2 on black]\ue0b0[/]"
-    )
-    FREQ_B_LABEL = (
-        "[#769ff0 on #394260]╭─[/]"
-        "[#a3aed2]░▒▓[/]"
-        "[#090c0c on #a3aed2]  VFO-B [/]"
+        "[#090c0c on #a3aed2]  Freq [/]"
         "[#a3aed2 on black]\ue0b0[/]"
     )
     BINDINGS = [
@@ -217,19 +208,14 @@ class DemodApp(App):
 
     def compose(self):
         yield Static(id="title-bar")
-        yield Static(id="conn-status")
-        yield Static(id="radio-info")
         with Horizontal(id="freq-bar"):
             with Vertical(id="freq-prompt"):
                 yield Static(self.FREQ_LABEL)
                 with Horizontal():
                     yield Static("[#769ff0 on #394260]╰─\uf10c[/]", classes="prompt-char")
                     yield Input(placeholder="kHz", id="freq-input")
-            with Vertical(id="freq-b-prompt"):
-                yield Static(self.FREQ_B_LABEL)
-                with Horizontal():
-                    yield Static("[#769ff0 on #394260]╰─\uf10c[/]", classes="prompt-char")
-                    yield Input(placeholder="kHz", id="freq-b-input")
+        yield Static(id="conn-status")
+        yield Static(id="radio-info")
         yield Static(id="spectrum-display")
         yield Static(id="audio-info")
         yield Static(id="status-bar", markup=True)
@@ -358,19 +344,35 @@ class DemodApp(App):
         indented = "\n".join("  " + row for row in graph.split("\n"))
 
         center = width // 2
-        marker_line = " " * center + "↑" + " " * (width - center - 1)
+
+        # Bandwidth underline centered on the marker
+        sample_rate = self.iq_client.sample_rate if self.iq_client.sample_rate > 0 else 192000
+        span_hz = sample_rate * self._spectrum_zoom
+        bw = self.demod.bandwidth if self.demod.mode != "DRM" else 10000
+        bw_half = max(1, int(bw / span_hz * width) // 2)
+        bw_start = max(0, center - bw_half)
+        bw_end = min(width, center + bw_half)
+        # Build bandwidth bar with center marker
+        bw_bar = [" "] * width
+        for i in range(bw_start, center):
+            bw_bar[i] = "▁"
+        if 0 <= center < width:
+            bw_bar[center] = "▲"
+        for i in range(center + 1, bw_end + 1):
+            if i < width:
+                bw_bar[i] = "▁"
+        bw_line = "".join(bw_bar)
 
         # Show center frequency and visible span
         freq_str = ""
         if self.frequency_hz > 0:
             freq_str = f"{self.frequency_hz / 1e6:.3f}"
-        sample_rate = self.iq_client.sample_rate if self.iq_client.sample_rate > 0 else 192000
-        span_khz = sample_rate * self._spectrum_zoom / 1000
+        span_khz = span_hz / 1000
         span_str = f"Span: {span_khz:.0f} kHz"
 
         w.update(
             f"{indented}\n"
-            f"  {marker_line}\n"
+            f"  {bw_line}\n"
             f"  {'':>{center - len(freq_str)//2}}{freq_str}{'':>{max(1, width - center - len(freq_str)//2 - len(span_str))}}{span_str}"
         )
 
@@ -569,6 +571,10 @@ class DemodApp(App):
 
         self.demod.mode = new_mode
         self.demod.reset()
+        # Set default bandwidth for the new mode
+        defaults = {"AM": 5000, "USB": 2400, "LSB": 2400}
+        if new_mode in defaults:
+            self.demod.set_bandwidth(defaults[new_mode])
         self._update_radio_info()
 
     def action_volume_up(self):
@@ -579,14 +585,24 @@ class DemodApp(App):
         self.demod.volume = max(0.0, self.demod.volume - 0.05)
         self._update_audio_info()
 
+    def _bw_limits(self):
+        """Return (min, max, step) for the current demod mode."""
+        if self.demod.mode == "AM":
+            return 4000, 10000, 1000
+        elif self.demod.mode in ("USB", "LSB"):
+            return 1200, 3200, 100
+        return 100, 24000, 500  # fallback
+
     def action_bw_up(self):
-        """Increase demodulation bandwidth by 500 Hz."""
-        self.demod.set_bandwidth(self.demod.bandwidth + 500)
+        """Increase demodulation bandwidth."""
+        bw_min, bw_max, step = self._bw_limits()
+        self.demod.set_bandwidth(min(bw_max, self.demod.bandwidth + step))
         self._update_radio_info()
 
     def action_bw_down(self):
-        """Decrease demodulation bandwidth by 500 Hz."""
-        self.demod.set_bandwidth(max(100, self.demod.bandwidth - 500))
+        """Decrease demodulation bandwidth."""
+        bw_min, bw_max, step = self._bw_limits()
+        self.demod.set_bandwidth(max(bw_min, self.demod.bandwidth - step))
         self._update_radio_info()
 
     def action_zoom_in(self):
@@ -662,39 +678,22 @@ class DemodApp(App):
         self.frequency_hz = freq_hz
         self._update_radio_info()
 
-    @work(thread=True)
-    def _do_tune_b(self, freq_hz):
-        """Send VFO-B tune command to radio in a worker thread."""
-        self.cat_client.set_frequency_b(freq_hz)
-
     def on_input_submitted(self, event):
-        """Handle frequency input submission."""
-        if event.input.id == "freq-input":
-            value = event.input.value.strip()
-            if not value:
-                return
-            try:
-                freq_khz = float(value)
-                freq_hz = int(freq_khz * 1000)
-            except ValueError:
-                return
-            if freq_hz > 0 and self.cat_client.connected:
-                self._do_tune(freq_hz)
-            event.input.value = ""
-            self.set_focus(None)
-        elif event.input.id == "freq-b-input":
-            value = event.input.value.strip()
-            if not value:
-                return
-            try:
-                freq_khz = float(value)
-                freq_hz = int(freq_khz * 1000)
-            except ValueError:
-                return
-            if freq_hz > 0 and self.cat_client.connected:
-                self._do_tune_b(freq_hz)
-            event.input.value = ""
-            self.set_focus(None)
+        """Handle frequency input submission — tunes the active VFO."""
+        if event.input.id != "freq-input":
+            return
+        value = event.input.value.strip()
+        if not value:
+            return
+        try:
+            freq_khz = float(value)
+            freq_hz = int(freq_khz * 1000)
+        except ValueError:
+            return
+        if freq_hz > 0 and self.cat_client.connected:
+            self._do_tune(freq_hz)
+        event.input.value = ""
+        self.set_focus(None)
 
     def check_action(self, action, parameters):
         """Suppress most keybindings while typing in the frequency input."""

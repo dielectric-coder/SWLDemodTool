@@ -11,6 +11,8 @@
 - `[drm]` config section with `dream_path` option
 
 ### Changed
+- Frequency input consolidated to a single field, moved to top of UI (tunes active VFO)
+- AM default bandwidth changed to 5000 Hz, minimum lowered to 4000 Hz
 - Mode cycling now includes DRM: AM → USB → LSB → DRM → AM
 - Demod mode and bandwidth are fully local — no longer polled from the radio
 - CAT polling is VFO-aware: queries active VFO's frequency via `FA;` or `FB;`
