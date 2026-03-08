@@ -3,6 +3,8 @@
 ## [0.3.0] - 2026-03-08
 
 ### Added
+- Synchronous AM demodulation (SAM) with PLL carrier tracking
+- Selectable sideband SAM modes: SAM-U (upper) and SAM-L (lower) for interference rejection
 - DRM (Digital Radio Mondiale) decoding via Dream subprocess integration
 - DRM status display: sync indicators (colour-coded), SNR, robustness mode, service label, bitrate, audio frame counts
 - Dream binary auto-detection from `../DRM/`, `PATH`, or config file
@@ -13,7 +15,7 @@
 ### Changed
 - Frequency input consolidated to a single field, moved to top of UI (tunes active VFO)
 - AM default bandwidth changed to 5000 Hz, minimum lowered to 4000 Hz
-- Mode cycling now includes DRM: AM → USB → LSB → DRM → AM
+- Mode cycling: AM → SAM → SAM-U → SAM-L → USB → LSB → DRM → AM
 - Demod mode and bandwidth are fully local — no longer polled from the radio
 - CAT polling is VFO-aware: queries active VFO's frequency via `FA;` or `FB;`
 - Tuning controls tune the active VFO (VFO-A or VFO-B)

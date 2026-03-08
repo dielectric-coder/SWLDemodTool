@@ -96,17 +96,24 @@ Mode codes in IF response (char 29): 1=LSB, 2=USB, 3=CW, 4=FM, 5=AM, 7=CW-R
 - Peak-hold downsampling (max per display bin) to preserve narrow signals
 - Multi-row Unicode block character rendering
 
-**AM/SSB demodulation:**
+**AM/SAM/SSB demodulation:**
 ```
 IQ (192 kHz) -> FIR lowpass (127-tap, scipy firwin)
              -> decimate (divide by 4)
-             -> detection: AM = envelope (magnitude), USB/LSB = product (I channel)
+             -> detection:
+                  AM    = envelope (magnitude)
+                  SAM   = PLL coherent (dot)
+                  SAM-U = PLL coherent (dot + cross)
+                  SAM-L = PLL coherent (dot - cross)
+                  USB/LSB = product (I channel)
              -> DC removal (smoothed mean subtraction)
              -> AGC (block-based, fast attack / slow decay)
              -> volume / mute
              -> hard clip [-1, 1]
              -> audio output (48 kHz)
 ```
+
+**SAM PLL:** PI loop filter (~30 Hz bandwidth at 48 kHz) with atan2-normalized phase error. Tracks carrier drift without following audio modulation.
 
 ### DRM Integration
 

@@ -54,7 +54,7 @@ The app auto-connects on startup to `localhost:4533` (IQ) and `localhost:4532` (
 | `r`             | Reconnect                           |
 | `m`             | Toggle mute                         |
 | `a`             | Toggle AGC                          |
-| `x`             | Cycle mode (AM → USB → LSB → DRM)  |
+| `x`             | Cycle mode (AM → SAM → SAM-U → SAM-L → USB → LSB → DRM) |
 | `v`             | Toggle VFO (A ↔ B)                  |
 | `+` / `-`       | Volume up / down                    |
 | `]` / `[`       | Increase / decrease demod bandwidth |
@@ -107,12 +107,15 @@ While acquiring a signal, the display shows "Acquiring..." until Dream locks ont
 
 ## Demodulation Modes
 
-| Mode | Detection | Notes |
-|------|-----------|-------|
-| AM   | Envelope (magnitude) | Default, 5 kHz bandwidth |
-| USB  | Product (I channel) | Upper sideband, 3 kHz bandwidth |
-| LSB  | Product (I channel) | Lower sideband, 3 kHz bandwidth |
-| DRM  | Dream decoder | Digital Radio Mondiale, requires Dream binary |
+| Mode  | Detection | Notes |
+|-------|-----------|-------|
+| AM    | Envelope (magnitude) | Default, 5 kHz bandwidth |
+| SAM   | PLL synchronous (both sidebands) | Fading-resistant, 5 kHz bandwidth |
+| SAM-U | PLL synchronous (upper sideband) | Rejects lower sideband interference |
+| SAM-L | PLL synchronous (lower sideband) | Rejects upper sideband interference |
+| USB   | Product (I channel) | Upper sideband, 2.4 kHz bandwidth |
+| LSB   | Product (I channel) | Lower sideband, 2.4 kHz bandwidth |
+| DRM   | Dream decoder | Digital Radio Mondiale, requires Dream binary |
 
 Mode and bandwidth are independent of the radio's settings — they are controlled locally in the app. VFO and frequency are polled from the radio so changes made on the radio or other apps are reflected.
 

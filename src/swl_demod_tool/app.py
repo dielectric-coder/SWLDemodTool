@@ -553,8 +553,8 @@ class DemodApp(App):
         self._update_audio_info()
 
     def action_cycle_mode(self):
-        """Cycle demodulation mode: AM → USB → LSB → DRM → AM."""
-        modes = ["AM", "USB", "LSB", "DRM"]
+        """Cycle demodulation mode: AM → SAM → SAM-U → SAM-L → USB → LSB → DRM → AM."""
+        modes = ["AM", "SAM", "SAM-U", "SAM-L", "USB", "LSB", "DRM"]
         old_mode = self.demod.mode
         idx = modes.index(old_mode) if old_mode in modes else 0
         new_mode = modes[(idx + 1) % len(modes)]
@@ -572,7 +572,7 @@ class DemodApp(App):
         self.demod.mode = new_mode
         self.demod.reset()
         # Set default bandwidth for the new mode
-        defaults = {"AM": 5000, "USB": 2400, "LSB": 2400}
+        defaults = {"AM": 5000, "SAM": 5000, "SAM-U": 5000, "SAM-L": 5000, "USB": 2400, "LSB": 2400}
         if new_mode in defaults:
             self.demod.set_bandwidth(defaults[new_mode])
         self._update_radio_info()
@@ -587,7 +587,7 @@ class DemodApp(App):
 
     def _bw_limits(self):
         """Return (min, max, step) for the current demod mode."""
-        if self.demod.mode == "AM":
+        if self.demod.mode in ("AM", "SAM", "SAM-U", "SAM-L"):
             return 4000, 10000, 1000
         elif self.demod.mode in ("USB", "LSB"):
             return 1200, 3200, 100

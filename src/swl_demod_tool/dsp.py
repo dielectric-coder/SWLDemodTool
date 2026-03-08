@@ -59,10 +59,11 @@ def spectrum_to_sparkline(db_values, width=60, height=5, min_db=-120.0, max_db=-
 # ---------------------------------------------------------------------------
 
 class Demodulator:
-    """AM/SSB demodulator with decimation, DC removal, and AGC.
+    """AM/SSB/SAM demodulator with decimation, DC removal, and AGC.
 
     Pipeline: IQ (192 kHz) → lowpass → decimate (÷4) → detect → DC remove → AGC → audio (48 kHz)
-    Detection: AM = envelope (magnitude), USB/LSB = product detector (real part).
+    Detection: AM = envelope (magnitude), USB/LSB = product detector (real part),
+               SAM = PLL synchronous detection.
     """
 
     def __init__(self, iq_sample_rate=192000, audio_rate=48000, bandwidth=5000):
@@ -70,7 +71,7 @@ class Demodulator:
         self.audio_rate = audio_rate
         self.decimation = iq_sample_rate // audio_rate  # 4
         self.bandwidth = bandwidth
-        self.mode = "AM"  # "AM", "USB", "LSB"
+        self.mode = "AM"  # "AM", "SAM", "SAM-U", "SAM-L", "USB", "LSB"
 
         # Design lowpass FIR filter for anti-alias before decimation
         # Cutoff at bandwidth relative to Nyquist (iq_sample_rate/2)
@@ -95,6 +96,13 @@ class Demodulator:
         # Volume (linear, 0..1)
         self.volume = 0.5
         self.muted = False
+
+        # PLL state for synchronous AM
+        self._pll_phase = 0.0       # NCO phase accumulator (radians)
+        self._pll_freq = 0.0        # NCO frequency offset (radians/sample)
+        # PI loop filter coefficients — ~30 Hz loop bandwidth at 48 kHz
+        self._pll_alpha = 0.005     # Proportional gain
+        self._pll_beta = 1.5e-5     # Integral gain
 
     def set_bandwidth(self, bandwidth):
         """Update the demodulation bandwidth (Hz)."""
@@ -130,6 +138,10 @@ class Demodulator:
         if self.mode in ("USB", "LSB"):
             # SSB product detector: real part of the complex baseband signal
             detected = i_dec.astype(np.float32)
+        elif self.mode in ("SAM", "SAM-U", "SAM-L"):
+            # Synchronous AM: PLL locks onto carrier, coherent product detection
+            # SAM = both sidebands, SAM-U = upper only, SAM-L = lower only
+            detected = self._pll_detect(i_dec, q_dec, self.mode)
         else:
             # AM envelope detection: magnitude
             detected = np.sqrt(i_dec ** 2 + q_dec ** 2)
@@ -180,9 +192,58 @@ class Demodulator:
             return 20.0 * np.log10(self._agc_gain)
         return -120.0
 
+    def _pll_detect(self, i_samples, q_samples, mode="SAM"):
+        """PLL-based synchronous AM detection.
+
+        Tracks the carrier with a phase-locked loop and performs coherent
+        product detection.  After derotation the in-phase (dot) component
+        carries the DSB audio.  The quadrature (cross) component is the
+        Hilbert transform, so:
+          SAM   = dot           (both sidebands)
+          SAM-U = dot + cross   (upper sideband)
+          SAM-L = dot - cross   (lower sideband)
+        """
+        n = len(i_samples)
+        out = np.empty(n, dtype=np.float32)
+        phase = self._pll_phase
+        freq = self._pll_freq
+        alpha = self._pll_alpha
+        beta = self._pll_beta
+
+        for k in range(n):
+            # NCO output (local oscillator)
+            cos_p = np.cos(phase)
+            sin_p = np.sin(phase)
+
+            # Derotate: project signal onto NCO axes
+            dot = i_samples[k] * cos_p + q_samples[k] * sin_p
+            cross = -i_samples[k] * sin_p + q_samples[k] * cos_p
+
+            # Sideband selection
+            if mode == "SAM-U":
+                out[k] = dot + cross
+            elif mode == "SAM-L":
+                out[k] = dot - cross
+            else:
+                out[k] = dot
+
+            # Phase error via atan2 — normalized, independent of amplitude
+            error = np.arctan2(cross, dot)
+
+            # PI loop filter
+            freq += beta * error
+            phase += freq + alpha * error
+
+        # Wrap phase to [-π, π]
+        self._pll_phase = (phase + np.pi) % (2 * np.pi) - np.pi
+        self._pll_freq = np.clip(freq, -0.5, 0.5)
+        return out
+
     def reset(self):
-        """Reset all filter and AGC state."""
+        """Reset all filter, AGC, and PLL state."""
         self._lp_zi_i = lfilter_zi(self._lp_taps, 1.0).astype(np.float32) * 0
         self._lp_zi_q = lfilter_zi(self._lp_taps, 1.0).astype(np.float32) * 0
         self._dc_avg = 0.0
         self._agc_gain = 100.0
+        self._pll_phase = 0.0
+        self._pll_freq = 0.0
