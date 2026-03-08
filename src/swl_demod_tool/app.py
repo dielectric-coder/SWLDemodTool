@@ -22,6 +22,7 @@ from swl_demod_tool.iq_client import IQClient
 from swl_demod_tool.cat_client import CATClient
 from swl_demod_tool.dsp import compute_spectrum_db, spectrum_to_sparkline, Demodulator
 from swl_demod_tool.audio import AudioOutput
+from swl_demod_tool.drm import DRMDecoder
 
 SPECTRUM_AVG = 3
 FFT_SIZE = 4096
@@ -175,11 +176,12 @@ class DemodApp(App):
         ("x", "cycle_mode", "Mode"),
         ("alt+right", "fine_tune_up", "Fine+"),
         ("alt+left", "fine_tune_down", "Fine-"),
+        ("v", "toggle_vfo", "VFO"),
     ]
 
     utc_display = reactive("--:-- UTC")
     frequency_hz = reactive(0)
-    mode_str = reactive("---")
+
     active_vfo = reactive("--")
     peak_db = reactive(-120.0)
     tune_step = reactive(1000)  # Fine tune step in Hz
@@ -199,6 +201,7 @@ class DemodApp(App):
         # Demodulation and audio
         self.demod = Demodulator(iq_sample_rate=192000, audio_rate=48000, bandwidth=5000)
         self.audio = AudioOutput(sample_rate=48000, block_size=1024)
+        self.drm = DRMDecoder(iq_sample_rate=192000)
 
         # Audio level tracking
         self._audio_level_db = -120.0
@@ -291,12 +294,42 @@ class DemodApp(App):
     def _update_radio_info(self):
         w = self.query_one("#radio-info", Static)
         vfo = self.active_vfo
+        mode = self.demod.mode
+        if mode == "DRM":
+            st = self.drm.get_status()
+            sync = st["sync"]
+            # Colour sync chars: O=green X=red *=yellow -=dim
+            sync_rich = ""
+            for c in sync:
+                if c == "O":
+                    sync_rich += "[green]O[/]"
+                elif c == "X":
+                    sync_rich += "[red]X[/]"
+                elif c == "*":
+                    sync_rich += "[yellow]*[/]"
+                else:
+                    sync_rich += "[#888888]-[/]"
+            if st["signal"]:
+                drm_detail = (
+                    f"  SNR: {st['snr']:.1f} dB"
+                    f"    Mode: {st['mode']}"
+                )
+                if st["label"]:
+                    drm_detail += f"    [{st['label']}]"
+                if st["bitrate"] > 0:
+                    drm_detail += f"    {st['bitrate']:.1f} kbps"
+                drm_detail += f"    Audio: {st['audio_ok']}/{st['audio_total']}"
+            else:
+                drm_detail = "  Acquiring..."
+            bw_str = f"DRM  Sync: {sync_rich}{drm_detail}"
+        else:
+            bw_str = f"BW: {self.demod.bandwidth} Hz"
         if self.frequency_hz > 0:
             freq_mhz = self.frequency_hz / 1e6
-            text = f"  VFO: {vfo}    Frequency: {freq_mhz:.6f} MHz    Mode: {self.mode_str}    BW: {self.demod.bandwidth} Hz"
+            text = f"  VFO: {vfo}    Frequency: {freq_mhz:.6f} MHz    Mode: {mode}    {bw_str}"
         else:
-            text = f"  VFO: {vfo}    Frequency: ---    Mode: ---    BW: {self.demod.bandwidth} Hz"
-        w.update(text)
+            text = f"  VFO: {vfo}    Frequency: ---    Mode: {mode}    {bw_str}"
+        w.update(Text.from_markup(text))
 
     def _update_spectrum(self):
         w = self.query_one("#spectrum-display", Static)
@@ -384,31 +417,39 @@ class DemodApp(App):
 
     def _update_status(self):
         bar = self.query_one("#status-bar", Static)
-        bar.update("  c:Connect  d:Disc  r:Recon  m:Mute  a:AGC  x:Mode  +/-:Vol  \\[/]:BW  ←/→:Tune  S-←/→:Zoom  /:Freq")
+        bar.update("  c:Connect  d:Disc  r:Recon  m:Mute  a:AGC  x:Mode  v:VFO  +/-:Vol  \\[/]:BW  ←/→:Tune  S-←/→:Zoom  /:Freq")
 
     # --- IQ data callback (from network thread) ---
 
     def _on_iq_data(self, iq_samples):
         """Called from IQ client thread with new IQ data."""
-        # Spectrum display
+        # Spectrum display (always, regardless of mode)
         db = compute_spectrum_db(iq_samples, FFT_SIZE)
         with self._iq_lock:
             self._spectrum_buf.append(db)
         peak = float(np.max(db))
 
-        # Demodulate and output audio
-        audio = self.demod.process(iq_samples)
-        if len(audio) > 0:
-            # Track audio level
-            rms = np.sqrt(np.mean(audio ** 2)) if not self.demod.muted else 0.0
-            level_db = 20.0 * np.log10(max(rms, 1e-10))
-            with self._audio_level_lock:
-                self._audio_level_db = level_db
+        if self.demod.mode == "DRM":
+            # Feed IQ to Dream subprocess
+            self.drm.write_iq(iq_samples)
+        else:
+            # Demodulate and output audio locally
+            audio = self.demod.process(iq_samples)
+            if len(audio) > 0:
+                # Track audio level
+                rms = np.sqrt(np.mean(audio ** 2)) if not self.demod.muted else 0.0
+                level_db = 20.0 * np.log10(max(rms, 1e-10))
+                with self._audio_level_lock:
+                    self._audio_level_db = level_db
 
-            # Push to audio output
-            self.audio.write(audio)
+                # Push to audio output
+                self.audio.write(audio)
 
         self.call_from_thread(self._apply_iq_update, peak)
+
+    def _on_drm_audio(self, audio):
+        """Called from DRM reader thread with decoded float32 audio."""
+        self.audio.write(audio)
 
     def _apply_iq_update(self, peak):
         self.peak_db = peak
@@ -419,14 +460,18 @@ class DemodApp(App):
     def _poll_cat(self):
         if not self.cat_client.connected:
             return
-        # Single IF command for both frequency and mode
-        freq, mode = self.cat_client.get_info()
-        if freq is not None:
-            self.call_from_thread(self._apply_cat_update, freq, mode)
-        # Poll active VFO
+        # Poll active VFO first so we query the right frequency
         vfo = self.cat_client.get_active_vfo()
         if vfo is not None:
             self.call_from_thread(setattr, self, "active_vfo", vfo)
+        # Query frequency for the active VFO
+        active = vfo or self.active_vfo
+        if active == "B":
+            freq = self.cat_client.get_vfo_b_freq()
+        else:
+            freq = self.cat_client.get_vfo_a_freq()
+        if freq is not None:
+            self.call_from_thread(self._apply_cat_update, freq)
         # Poll S-meter
         sm = self.cat_client.get_s_meter()
         if sm is not None:
@@ -436,39 +481,9 @@ class DemodApp(App):
         if not self.cat_client.connected:
             self.call_from_thread(self._update_conn_status)
 
-    def _apply_cat_update(self, freq, mode=None):
-        changed = (freq != self.frequency_hz)
+    def _apply_cat_update(self, freq):
         self.frequency_hz = freq
-        if changed and mode:
-            self.mode_str = mode
-            self._auto_bandwidth(mode)
-            self._update_radio_info()
-
-    def _auto_bandwidth(self, mode):
-        """Set demodulation bandwidth and mode based on radio mode."""
-        bw_map = {
-            "AM": 5000,
-            "LSB": 3000,
-            "USB": 3000,
-            "CW": 500,
-            "CW-R": 500,
-            "FM": 6000,
-        }
-        mode_map = {
-            "AM": "AM",
-            "LSB": "LSB",
-            "USB": "USB",
-            "CW": "USB",
-            "CW-R": "LSB",
-            "FM": "AM",
-        }
-        bw = bw_map.get(mode)
-        if bw:
-            self.demod.set_bandwidth(bw)
-        demod_mode = mode_map.get(mode, "AM")
-        if demod_mode != self.demod.mode:
-            self.demod.mode = demod_mode
-            self.demod.reset()
+        self._update_radio_info()
 
     # --- Actions ---
 
@@ -488,8 +503,11 @@ class DemodApp(App):
                     self.demod.iq_sample_rate = sr
                     self.demod.decimation = sr // self.demod.audio_rate
                     self.demod.set_bandwidth(self.demod.bandwidth)
-                # Start audio output
+                    self.drm.iq_sample_rate = sr
+                # Start audio output and DRM decoder if active
                 self.audio.start(device=self.audio_device)
+                if self.demod.mode == "DRM":
+                    self.drm.start(audio_callback=self._on_drm_audio)
                 self.call_from_thread(self._update_conn_status)
                 # Start IQ streaming
                 self.iq_client.start_streaming(self._on_iq_data)
@@ -499,21 +517,22 @@ class DemodApp(App):
             self.cat_client.connect()
             self.call_from_thread(self._update_conn_status)
             if self.cat_client.connected:
-                freq, mode = self.cat_client.get_info()
-                if freq:
-                    self.call_from_thread(setattr, self, "frequency_hz", freq)
-                if mode:
-                    self.call_from_thread(setattr, self, "mode_str", mode)
-                    self.call_from_thread(self._auto_bandwidth, mode)
                 vfo = self.cat_client.get_active_vfo()
                 if vfo:
                     self.call_from_thread(setattr, self, "active_vfo", vfo)
+                if vfo == "B":
+                    freq = self.cat_client.get_vfo_b_freq()
+                else:
+                    freq = self.cat_client.get_vfo_a_freq()
+                if freq:
+                    self.call_from_thread(setattr, self, "frequency_hz", freq)
                 self.call_from_thread(self._update_radio_info)
 
     def action_disconnect(self):
         self.iq_client.disconnect()
         self.cat_client.disconnect()
         self.audio.stop()
+        self.drm.stop()
         self.demod.reset()
         self._spectrum_buf.clear()
         self._update_conn_status()
@@ -532,12 +551,24 @@ class DemodApp(App):
         self._update_audio_info()
 
     def action_cycle_mode(self):
-        """Cycle demodulation mode: AM → USB → LSB → AM."""
-        modes = ["AM", "USB", "LSB"]
-        idx = modes.index(self.demod.mode) if self.demod.mode in modes else 0
-        self.demod.mode = modes[(idx + 1) % len(modes)]
+        """Cycle demodulation mode: AM → USB → LSB → DRM → AM."""
+        modes = ["AM", "USB", "LSB", "DRM"]
+        old_mode = self.demod.mode
+        idx = modes.index(old_mode) if old_mode in modes else 0
+        new_mode = modes[(idx + 1) % len(modes)]
+
+        # Transition away from DRM: stop Dream
+        if old_mode == "DRM" and new_mode != "DRM":
+            self.drm.stop()
+
+        # Transition to DRM: start Dream with audio callback
+        if new_mode == "DRM" and old_mode != "DRM":
+            if not self.drm.start(audio_callback=self._on_drm_audio):
+                self.notify("Dream binary not found", severity="error")
+                return
+
+        self.demod.mode = new_mode
         self.demod.reset()
-        self.mode_str = self.demod.mode
         self._update_radio_info()
 
     def action_volume_up(self):
@@ -586,6 +617,28 @@ class DemodApp(App):
         """Fine tune down by 100 Hz."""
         self._tune_offset(-100)
 
+    def action_toggle_vfo(self):
+        """Switch between VFO-A and VFO-B."""
+        if not self.cat_client.connected:
+            return
+        new_vfo = "B" if self.active_vfo == "A" else "A"
+        self._do_set_vfo(new_vfo)
+
+    @work(thread=True)
+    def _do_set_vfo(self, vfo):
+        """Send VFO switch command to radio in a worker thread."""
+        if self.cat_client.set_active_vfo(vfo):
+            self.call_from_thread(setattr, self, "active_vfo", vfo)
+            # Refresh frequency for the new VFO
+            if vfo == "B":
+                freq = self.cat_client.get_vfo_b_freq()
+            else:
+                freq = self.cat_client.get_vfo_a_freq()
+            if freq is not None:
+                self.call_from_thread(self._apply_cat_update, freq)
+            else:
+                self.call_from_thread(self._update_radio_info)
+
     def _tune_offset(self, offset_hz):
         """Tune the radio by an offset from current frequency."""
         if not self.cat_client.connected or self.frequency_hz <= 0:
@@ -598,7 +651,11 @@ class DemodApp(App):
     @work(thread=True)
     def _do_tune(self, freq_hz):
         """Send tune command to radio in a worker thread."""
-        if self.cat_client.set_frequency(freq_hz):
+        if self.active_vfo == "B":
+            ok = self.cat_client.set_frequency_b(freq_hz)
+        else:
+            ok = self.cat_client.set_frequency(freq_hz)
+        if ok:
             self.call_from_thread(self._apply_tune, freq_hz)
 
     def _apply_tune(self, freq_hz):
@@ -651,6 +708,7 @@ class DemodApp(App):
 
     def on_unmount(self):
         self.audio.stop()
+        self.drm.stop()
         self.iq_client.disconnect()
         self.cat_client.disconnect()
 
@@ -669,9 +727,11 @@ def main():
     iq_port = args.iq_port or config.getint("server", "iq_port")
     cat_port = args.cat_port or config.getint("server", "cat_port")
     audio_device = args.audio_device or config.get("audio", "device")
+    dream_path = config.get("drm", "dream_path", fallback="") or None
 
     app = DemodApp(host=host, iq_port=iq_port, cat_port=cat_port,
                    audio_device=audio_device)
+    app.drm.dream_path = app.drm.dream_path or dream_path
     app.run()
 
 

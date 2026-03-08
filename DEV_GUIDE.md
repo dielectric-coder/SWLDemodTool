@@ -8,7 +8,8 @@ src/swl_demod_tool/
     app.py            # Textual TUI application (entry point: main())
     iq_client.py      # TCP client for IQ sample stream
     cat_client.py     # TCP client for CAT radio control
-    dsp.py            # DSP: FFT spectrum, sparkline rendering, AM demodulator
+    dsp.py            # DSP: FFT spectrum, sparkline rendering, AM/SSB demodulator
+    drm.py            # DRM decoder integration (Dream subprocess)
     audio.py          # Audio output via sounddevice with ring buffer
     config.py         # INI config file handling
 ```
@@ -19,20 +20,31 @@ Real-time data pipeline: **IQ network stream -> DSP -> audio output**, with a Te
 
 ### Threading Model
 
-Three threads cooperate:
+Multiple threads cooperate:
 
 1. **Main thread** - Textual event loop, UI rendering, timer callbacks
 2. **IQ receive thread** - Daemon thread in `IQClient`, reads TCP stream, calls `_on_iq_data()` callback
 3. **Audio callback thread** - Managed by sounddevice, pulls from ring buffer
+4. **DRM audio reader thread** (DRM mode only) - Reads decoded int16 audio from Dream's stdout
+5. **DRM stderr thread** (DRM mode only) - Parses status lines from Dream's stderr
 
-Data flow:
+Data flow (AM/SSB mode):
 ```
 IQ TCP stream -> IQClient._receive_loop() -> DemodApp._on_iq_data()
     -> compute_spectrum_db() -> spectrum buffer (for display)
     -> Demodulator.process() -> AudioOutput.write() -> ring buffer -> speakers
 ```
 
-UI updates from the IQ thread are marshalled via `call_from_thread()`.
+Data flow (DRM mode):
+```
+IQ TCP stream -> IQClient._receive_loop() -> DemodApp._on_iq_data()
+    -> compute_spectrum_db() -> spectrum buffer (for display)
+    -> DRMDecoder.write_iq() -> Dream stdin (int16 stereo IQ)
+                                Dream stdout -> _read_audio() -> AudioOutput.write() -> ring buffer -> speakers
+                                Dream stderr -> _read_stderr() -> status dict -> display
+```
+
+UI updates from background threads are marshalled via `call_from_thread()`.
 
 ### IQ Protocol
 
@@ -46,12 +58,19 @@ Samples are normalized to float32 [-1, 1] range by dividing by 2^31.
 
 Kenwood TS-480 compatible, semicolon-terminated ASCII commands over TCP.
 
-| Command | Response        | Description                              |
-|---------|-----------------|------------------------------------------|
-| `IF;`   | `IF...;`        | Frequency (chars 2-13), mode (char 29)   |
-| `SM0;`  | `SM0PPPP;`      | S-meter (4-digit value, see table below) |
+| Command  | Response        | Description                              |
+|----------|-----------------|------------------------------------------|
+| `IF;`    | `IF...;`        | Frequency (chars 2-13), mode (char 29)   |
+| `FA;`    | `FA...;`        | VFO-A frequency (11-digit Hz)            |
+| `FB;`    | `FB...;`        | VFO-B frequency (11-digit Hz)            |
+| `FR;`    | `FR0;`/`FR1;`   | Active VFO (0=A, 1=B)                    |
+| `FR0;`   | `FR0;`          | Set active VFO to A                      |
+| `FR1;`   | `FR1;`          | Set active VFO to B                      |
+| `FA...;` | `FA...;`        | Set VFO-A frequency                      |
+| `FB...;` | `FB...;`        | Set VFO-B frequency                      |
+| `SM0;`   | `SM0PPPP;`      | S-meter (4-digit value, see table below) |
 
-The `get_info()` method returns both frequency and mode from a single `IF;` call. S-meter lookup uses `bisect` for efficient mapping.
+The CAT poller queries VFO and frequency each cycle so external frequency changes are tracked. Mode and bandwidth are local to the app and not polled from the radio.
 
 **S-meter mapping (SM command P2 values):**
 
@@ -77,17 +96,38 @@ Mode codes in IF response (char 29): 1=LSB, 2=USB, 3=CW, 4=FM, 5=AM, 7=CW-R
 - Peak-hold downsampling (max per display bin) to preserve narrow signals
 - Multi-row Unicode block character rendering
 
-**AM demodulation:**
+**AM/SSB demodulation:**
 ```
 IQ (192 kHz) -> FIR lowpass (127-tap, scipy firwin)
              -> decimate (divide by 4)
-             -> envelope detection (magnitude)
+             -> detection: AM = envelope (magnitude), USB/LSB = product (I channel)
              -> DC removal (smoothed mean subtraction)
              -> AGC (block-based, fast attack / slow decay)
              -> volume / mute
              -> hard clip [-1, 1]
              -> audio output (48 kHz)
 ```
+
+### DRM Integration
+
+DRM decoding uses the Dream open-source decoder as a subprocess, following the [openwebrx](https://github.com/jketterl/openwebrx) approach:
+
+```
+Dream command: dream -c 6 --sigsrate {iq_rate} --audsrate 48000 -I - -O -
+```
+
+- `-I -` reads raw int16 stereo IQ from stdin
+- `-O -` writes decoded int16 stereo audio to stdout
+- `-c 6` selects IQ positive, zero-IF input mode
+- Status is emitted to stderr as `DRM|SYNC|signal|snr|label|bitrate|mode|audiook/total`
+
+The `DRMDecoder` class manages the subprocess lifecycle:
+- `start(audio_callback)` — spawns Dream, starts reader/parser threads
+- `write_iq(complex64)` — converts to int16 stereo, writes to stdin
+- `get_status()` — returns latest parsed status dict
+- `stop()` — terminates Dream, cleans up
+
+Dream binary auto-detection order: configured path, `../DRM/dream-2.1.1-svn808/dream/dream`, `PATH`.
 
 ### Key Constants
 
@@ -100,6 +140,7 @@ IQ (192 kHz) -> FIR lowpass (127-tap, scipy firwin)
 | AGC target RMS    | 0.3     | `dsp.py`      |
 | IQ chunk size     | 12288 B | `iq_client.py`|
 | Audio buffer      | 1 sec   | `audio.py`    |
+| DRM status interval | 1 sec | Dream patch   |
 
 ## Development Setup
 

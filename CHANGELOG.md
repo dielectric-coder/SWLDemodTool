@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.3.0] - 2026-03-08
+
+### Added
+- DRM (Digital Radio Mondiale) decoding via Dream subprocess integration
+- DRM status display: sync indicators (colour-coded), SNR, robustness mode, service label, bitrate, audio frame counts
+- Dream binary auto-detection from `../DRM/`, `PATH`, or config file
+- VFO-A/B toggle via `v` key with CAT `FR0;`/`FR1;` commands
+- VFO-B frequency query via `FB;` command
+- `[drm]` config section with `dream_path` option
+
+### Changed
+- Mode cycling now includes DRM: AM → USB → LSB → DRM → AM
+- Demod mode and bandwidth are fully local — no longer polled from the radio
+- CAT polling is VFO-aware: queries active VFO's frequency via `FA;` or `FB;`
+- Tuning controls tune the active VFO (VFO-A or VFO-B)
+- Radio info display shows `demod.mode` instead of radio-reported mode
+- DRM audio flows through the existing ring buffer (no separate PulseAudio output)
+
+### Removed
+- `mode_str` reactive (mode display now reads directly from `demod.mode`)
+- `_auto_bandwidth()` — mode/bandwidth no longer auto-set from radio
+
 ## [0.2.0] - 2026-03-07
 
 ### Added

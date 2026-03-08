@@ -16,6 +16,9 @@ DEFAULTS = {
         "sample_rate": "48000",
         "buffer_size": "1024",
     },
+    "drm": {
+        "dream_path": "",
+    },
 }
 
 

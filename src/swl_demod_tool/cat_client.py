@@ -63,9 +63,12 @@ class CATClient:
         "4": "FM", "5": "AM", "7": "CW-R",
     }
 
-    def get_info(self):
-        """Query VFO-A frequency and mode. Returns (frequency_hz, mode_str) or (None, None)."""
-        freq = self.get_vfo_a_freq()
+    def get_info(self, vfo="A"):
+        """Query frequency and mode for given VFO. Returns (frequency_hz, mode_str) or (None, None)."""
+        if vfo == "B":
+            freq = self.get_vfo_b_freq()
+        else:
+            freq = self.get_vfo_a_freq()
         mode = self._get_mode_from_if()
         return freq, mode
 
@@ -73,6 +76,16 @@ class CATClient:
         """Query VFO-A frequency via FA command. Returns Hz or None."""
         resp = self.send_command("FA;")
         if resp and resp.startswith("FA") and len(resp) >= 13:
+            try:
+                return int(resp[2:13])
+            except ValueError:
+                pass
+        return None
+
+    def get_vfo_b_freq(self):
+        """Query VFO-B frequency via FB command. Returns Hz or None."""
+        resp = self.send_command("FB;")
+        if resp and resp.startswith("FB") and len(resp) >= 13:
             try:
                 return int(resp[2:13])
             except ValueError:
@@ -98,6 +111,12 @@ class CATClient:
             elif resp[2] == "1":
                 return "B"
         return None
+
+    def set_active_vfo(self, vfo):
+        """Set active receive VFO. vfo should be 'A' or 'B'."""
+        digit = "0" if vfo == "A" else "1"
+        resp = self.send_command(f"FR{digit};")
+        return resp is not None
 
     def set_frequency(self, freq_hz):
         """Set VFO-A frequency via FA command. freq_hz is an integer in Hz."""
