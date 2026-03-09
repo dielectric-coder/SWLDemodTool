@@ -25,7 +25,7 @@ pip install -e .
 
 ### DRM Support
 
-DRM decoding requires the Dream binary. Build it from source or install from your package manager. The app looks for it at `../DRM/dream-2.1.1-svn808/dream/dream` (relative to the project) or in your `PATH`. You can also set the path in the config file.
+DRM decoding requires the Dream 2.2 binary. Build it from source or install from your package manager. The app looks for it at `../DRM/dream-2.2/dream` (relative to the project) or in your `PATH`. You can also set the path in the config file.
 
 ## Running
 
@@ -44,6 +44,7 @@ The app auto-connects on startup to `localhost:4533` (IQ) and `localhost:4532` (
 | `--cat-port`     | CAT control TCP port               | 4532           |
 | `--audio-device` | Audio output device name           | default        |
 | `--version`      | Show version and exit              |                |
+| `--debug`        | Enable debug logging to `swl-demod.log` |           |
 
 ## Keyboard Controls
 
@@ -70,7 +71,7 @@ The app auto-connects on startup to `localhost:4533` (IQ) and `localhost:4532` (
 ## Display Layout
 
 ```
-  SWL Demod Tool v0.3.0     12:34:56 UTC
+  SWL Demod Tool v0.4.0     12:34:56 UTC
   ╭─░▒▓  Freq ► ╰─⏺ [kHz]
     IQ ● localhost:4533  192000 Hz 32-bit IQ
    CAT ● localhost:4532
@@ -89,7 +90,7 @@ A dedicated panel below the audio info displays mode-specific indicators:
 
 **CW modes (CW+/CW-):** Tuning indicator (center-zero bar, ±150 Hz range), tone SNR, estimated speed in WPM, and RIT offset. When no tone is detected, readings hold for ~1 second before blanking.
 
-**DRM mode:** Sync status, SNR, robustness mode, service label, bitrate, and audio frame counts. The sync indicators show six status fields (IO, Time, Frame, FAC, SDC, MSC):
+**DRM mode:** Sync status, SNR, robustness mode, station label, bitrate, and text messages. The sync indicators show six status fields (IO, Time, Frame, FAC, SDC, MSC):
 - Green `O` = OK
 - Red `X` = CRC error
 - Yellow `*` = data error

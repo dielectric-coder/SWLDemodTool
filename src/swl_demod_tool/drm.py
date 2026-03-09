@@ -1,27 +1,46 @@
-"""DRM decoder integration — wraps the Dream DRM decoder as a subprocess.
+"""DRM decoder integration — wraps the Dream 2.2 decoder as a subprocess.
 
 Uses Dream's stdin/stdout pipe mode (-I - / -O -) following the same
 approach as openwebrx.  IQ data is written to Dream's stdin as raw
 int16 interleaved stereo (I=left, Q=right).  Decoded audio is read
 from Dream's stdout as raw int16 mono and fed into the app's audio
-ring buffer.  Status information is parsed from stderr.
+ring buffer.  Status information is read from a Unix domain socket
+via Dream's --status-socket option (JSON format).
 """
 
+import json
+import logging
 import os
 import shutil
+import socket
 import subprocess
+import tempfile
 import threading
+import time
 import numpy as np
 
-# Default path to Dream binary (relative to this project)
+log = logging.getLogger(__name__)
+
+# Default path to Dream 2.2 binary (relative to this project)
 _DEFAULT_DREAM_PATH = os.path.normpath(
     os.path.join(os.path.dirname(__file__), "..", "..", "..", "DRM",
-                 "dream-2.1.1-svn808", "dream", "dream")
-)
+                 "dream-2.2", "dream"))
 
-# Status field names for the DRM|... line from patched Dream
-_STATUS_FIELDS = ("sync", "signal", "snr", "label", "bitrate", "mode",
-                  "audio_ratio")
+_ROBUSTNESS_MODES = {0: "A", 1: "B", 2: "C", 3: "D"}
+_SYNC_KEYS = ("io", "time", "frame", "fac", "sdc", "msc")
+
+
+def _default_status():
+    """Return a fresh default status dict."""
+    return {
+        "sync": "------",
+        "signal": False,
+        "snr": 0.0,
+        "label": "",
+        "text": "",
+        "bitrate": 0.0,
+        "mode": "?",
+    }
 
 
 def find_dream_binary(configured_path=None):
@@ -40,12 +59,11 @@ def find_dream_binary(configured_path=None):
 
 
 class DRMDecoder:
-    """Manages a Dream DRM decoder subprocess using stdin/stdout pipes.
+    """Manages a Dream 2.2 DRM decoder subprocess using stdin/stdout pipes.
 
     Dream reads raw int16 stereo IQ from stdin (-I -) and writes
-    decoded int16 audio to stdout (-O -).  A patched Dream also emits
-    periodic status lines to stderr in the format:
-        DRM|SYNC|signal|snr|label|bitrate|mode|audiook/total
+    decoded int16 audio to stdout (-O -).  JSON status is broadcast
+    via a Unix domain socket (--status-socket).
     """
 
     def __init__(self, iq_sample_rate=48000, audio_rate=48000,
@@ -56,36 +74,35 @@ class DRMDecoder:
         self._process = None
         self._reader_thread = None
         self._stderr_thread = None
+        self._socket_thread = None
         self._audio_callback = None
+        self._stop_event = threading.Event()
         self._lock = threading.Lock()
+        self._socket_path = None
 
-        # Latest status from Dream's stderr
-        self.status = {
-            "sync": "------",   # 6 chars: IO,Time,Frame,FAC,SDC,MSC
-            "signal": False,    # DRM signal acquired
-            "snr": 0.0,         # Signal-to-noise ratio in dB
-            "label": "",        # Service label
-            "bitrate": 0.0,     # Audio bitrate kbps
-            "mode": "?",        # Robustness mode A/B/C/D
-            "audio_ok": 0,      # Audio frames OK
-            "audio_total": 0,   # Audio frames total
-        }
+        self.status = _default_status()
 
     @property
     def running(self):
         return self._process is not None and self._process.poll() is None
 
     def start(self, audio_callback=None):
-        """Start the Dream subprocess.
-
-        audio_callback: callable(np.ndarray float32) to receive decoded audio.
-        """
+        """Start the Dream subprocess."""
         if self.running:
             return True
         if not self.dream_path:
             return False
 
         self._audio_callback = audio_callback
+        self._stop_event.clear()
+
+        self._socket_path = os.path.join(
+            tempfile.gettempdir(),
+            f"dream_status_{os.getpid()}.sock")
+        try:
+            os.unlink(self._socket_path)
+        except FileNotFoundError:
+            pass
 
         cmd = [
             self.dream_path,
@@ -94,7 +111,10 @@ class DRMDecoder:
             "--audsrate", str(self.audio_rate),
             "-I", "-",   # Read IQ from stdin
             "-O", "-",   # Write decoded audio to stdout
+            "--status-socket", self._socket_path,
         ]
+        log.info("Starting Dream: %s", " ".join(cmd))
+
         self._process = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
@@ -102,27 +122,26 @@ class DRMDecoder:
             stderr=subprocess.PIPE,
         )
 
-        # Start audio reader thread (reads decoded int16 from stdout)
         self._reader_thread = threading.Thread(
             target=self._read_audio, daemon=True)
         self._reader_thread.start()
 
-        # Start stderr parser thread (reads status lines)
+        self._socket_thread = threading.Thread(
+            target=self._read_status_socket, daemon=True)
+        self._socket_thread.start()
+
+        # Drain stderr to prevent pipe blocking
         self._stderr_thread = threading.Thread(
-            target=self._read_stderr, daemon=True)
+            target=self._drain_stderr, daemon=True)
         self._stderr_thread.start()
 
         return True
 
     def write_iq(self, iq_samples):
-        """Write IQ samples to Dream's stdin.
-
-        iq_samples: complex64 numpy array (normalised to [-1, 1]).
-        """
+        """Write IQ samples to Dream's stdin."""
         if not self.running or self._process.stdin is None:
             return
 
-        # Convert complex64 → interleaved int16 stereo (I, Q)
         scale = 32767.0
         interleaved = np.empty(len(iq_samples) * 2, dtype=np.int16)
         interleaved[0::2] = np.clip(
@@ -133,23 +152,20 @@ class DRMDecoder:
         try:
             self._process.stdin.write(interleaved.tobytes())
             self._process.stdin.flush()
-        except (OSError, BrokenPipeError):
-            pass
+        except (OSError, BrokenPipeError) as e:
+            log.debug("write_iq error: %s", e)
 
     def _read_audio(self):
         """Read decoded audio from Dream's stdout and deliver via callback."""
-        # Dream outputs int16 stereo at audio_rate
-        chunk_bytes = 4096  # read in chunks
+        chunk_bytes = 4096
         try:
-            while self.running:
+            while not self._stop_event.is_set():
                 data = self._process.stdout.read(chunk_bytes)
                 if not data:
                     break
-                # Convert int16 stereo to float32 mono (downmix)
                 samples = np.frombuffer(data, dtype=np.int16)
                 if len(samples) < 2:
                     continue
-                # Stereo → mono: average L and R
                 stereo = samples.reshape(-1, 2)
                 mono = stereo.mean(axis=1).astype(np.float32) / 32768.0
                 if self._audio_callback:
@@ -157,30 +173,125 @@ class DRMDecoder:
         except (OSError, ValueError):
             pass
 
-    def _read_stderr(self):
-        """Parse status lines from Dream's stderr."""
+    def _read_status_socket(self):
+        """Read JSON status from Dream's Unix domain socket."""
+        # Wait for socket file to appear
+        for _ in range(50):
+            if self._stop_event.is_set():
+                return
+            if os.path.exists(self._socket_path):
+                break
+            time.sleep(0.1)
+        else:
+            log.warning("Dream status socket did not appear: %s",
+                        self._socket_path)
+            return
+
+        # Retry connection until Dream is listening
+        sock = None
+        for _ in range(10):
+            if self._stop_event.is_set():
+                return
+            try:
+                sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                sock.connect(self._socket_path)
+                break
+            except (OSError, ConnectionRefusedError) as e:
+                log.debug("Status socket connect attempt failed: %s", e)
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+                sock = None
+                time.sleep(0.5)
+
+        if sock is None:
+            log.warning("Could not connect to Dream status socket")
+            return
+
+        log.info("Connected to Dream status socket")
+        try:
+            sock.settimeout(2.0)
+            buf = b""
+            while not self._stop_event.is_set():
+                try:
+                    data = sock.recv(4096)
+                except socket.timeout:
+                    continue
+                if not data:
+                    break
+                buf += data
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    self._parse_json_status(line)
+        except OSError as e:
+            log.debug("Status socket error: %s", e)
+        finally:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+    def _parse_json_status(self, raw):
+        """Parse a JSON status line from Dream 2.2."""
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            return
+
+        # Build sync string from status dict
+        # Dream status: 0=RX_OK, 1=CRC_ERROR, 2=DATA_ERROR, -1=NOT_PRESENT
+        st = data.get("status", {})
+        sync_chars = []
+        for key in _SYNC_KEYS:
+            val = st.get(key, -1)
+            if val == 0:
+                sync_chars.append("O")
+            elif val in (1, 2):
+                sync_chars.append("*")
+            else:
+                sync_chars.append("-")
+        sync = "".join(sync_chars)
+
+        signal_info = data.get("signal", {})
+        snr = signal_info.get("snr_db", 0.0)
+        signal = st.get("fac", -1) == 0
+
+        mode_info = data.get("mode", {})
+        mode = _ROBUSTNESS_MODES.get(mode_info.get("robustness", -1), "?")
+
+        # Extract service info
+        label = ""
+        text = ""
+        bitrate = 0.0
+        services = data.get("service_list", [])
+        for svc in services:
+            if svc.get("is_audio", False):
+                label = svc.get("label", "").strip()
+                text = svc.get("text", "").strip()
+                bitrate = svc.get("bitrate_kbps", 0.0)
+                break
+        if not label and services:
+            svc = services[0]
+            label = svc.get("label", "").strip()
+            text = svc.get("text", "").strip()
+            bitrate = svc.get("bitrate_kbps", 0.0)
+
+        with self._lock:
+            self.status["sync"] = sync
+            self.status["signal"] = signal
+            self.status["snr"] = snr
+            self.status["label"] = label
+            self.status["text"] = text
+            self.status["bitrate"] = bitrate
+            self.status["mode"] = mode
+
+    def _drain_stderr(self):
+        """Drain stderr to prevent pipe blocking."""
         try:
             for raw_line in self._process.stderr:
-                line = raw_line.decode(errors="replace").strip()
-                if not line.startswith("DRM|"):
-                    continue
-                parts = line.split("|")
-                if len(parts) < 8:
-                    continue
-                try:
-                    audio_parts = parts[7].split("/")
-                    with self._lock:
-                        self.status["sync"] = parts[1]
-                        self.status["signal"] = parts[2] == "1"
-                        self.status["snr"] = float(parts[3])
-                        self.status["label"] = parts[4]
-                        self.status["bitrate"] = float(parts[5])
-                        self.status["mode"] = parts[6]
-                        self.status["audio_ok"] = int(audio_parts[0])
-                        self.status["audio_total"] = int(audio_parts[1]) \
-                            if len(audio_parts) > 1 else 0
-                except (ValueError, IndexError):
-                    pass
+                log.debug("Dream stderr: %s",
+                          raw_line.decode(errors="replace").rstrip())
         except (OSError, ValueError):
             pass
 
@@ -191,8 +302,8 @@ class DRMDecoder:
 
     def stop(self):
         """Stop the Dream subprocess and clean up."""
+        self._stop_event.set()
         if self._process is not None:
-            # Close stdin to signal Dream to stop
             if self._process.stdin:
                 try:
                     self._process.stdin.close()
@@ -208,10 +319,11 @@ class DRMDecoder:
                     pass
             self._process = None
         self._audio_callback = None
-        # Reset status
+        if self._socket_path:
+            try:
+                os.unlink(self._socket_path)
+            except FileNotFoundError:
+                pass
+            self._socket_path = None
         with self._lock:
-            self.status = {
-                "sync": "------", "signal": False, "snr": 0.0,
-                "label": "", "bitrate": 0.0, "mode": "?",
-                "audio_ok": 0, "audio_total": 0,
-            }
+            self.status = _default_status()

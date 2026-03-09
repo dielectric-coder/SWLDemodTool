@@ -26,7 +26,8 @@ Multiple threads cooperate:
 2. **IQ receive thread** - Daemon thread in `IQClient`, reads TCP stream, calls `_on_iq_data()` callback
 3. **Audio callback thread** - Managed by sounddevice, pulls from ring buffer
 4. **DRM audio reader thread** (DRM mode only) - Reads decoded int16 audio from Dream's stdout
-5. **DRM stderr thread** (DRM mode only) - Parses status lines from Dream's stderr
+5. **DRM status socket thread** (DRM mode only) - Reads JSON status from Dream's Unix domain socket
+6. **DRM stderr drain thread** (DRM mode only) - Drains stderr to prevent pipe blocking
 
 Data flow (AM/SSB mode):
 ```
@@ -41,7 +42,7 @@ IQ TCP stream -> IQClient._receive_loop() -> DemodApp._on_iq_data()
     -> compute_spectrum_db() -> spectrum buffer (for display)
     -> DRMDecoder.write_iq() -> Dream stdin (int16 stereo IQ)
                                 Dream stdout -> _read_audio() -> AudioOutput.write() -> ring buffer -> speakers
-                                Dream stderr -> _read_stderr() -> status dict -> display
+                                Dream status socket -> _read_status_socket() -> status dict -> display
 ```
 
 UI updates from background threads are marshalled via `call_from_thread()`.
@@ -126,24 +127,24 @@ IQ (192 kHz) -> FIR lowpass (127-tap, scipy firwin)
 
 ### DRM Integration
 
-DRM decoding uses the Dream open-source decoder as a subprocess, following the [openwebrx](https://github.com/jketterl/openwebrx) approach:
+DRM decoding uses the Dream 2.2 open-source decoder as a subprocess, following the [openwebrx](https://github.com/jketterl/openwebrx) approach:
 
 ```
-Dream command: dream -c 6 --sigsrate {iq_rate} --audsrate 48000 -I - -O -
+Dream command: dream -c 6 --sigsrate {iq_rate} --audsrate 48000 -I - -O - --status-socket /tmp/dream_status_PID.sock
 ```
 
 - `-I -` reads raw int16 stereo IQ from stdin
 - `-O -` writes decoded int16 stereo audio to stdout
 - `-c 6` selects IQ positive, zero-IF input mode
-- Status is emitted to stderr as `DRM|SYNC|signal|snr|label|bitrate|mode|audiook/total`
+- `--status-socket` broadcasts JSON status via a Unix domain socket (sync, SNR, mode, service label, text, bitrate)
 
 The `DRMDecoder` class manages the subprocess lifecycle:
-- `start(audio_callback)` — spawns Dream, starts reader/parser threads
+- `start(audio_callback)` — spawns Dream, starts audio reader / status socket / stderr drain threads
 - `write_iq(complex64)` — converts to int16 stereo, writes to stdin
 - `get_status()` — returns latest parsed status dict
-- `stop()` — terminates Dream, cleans up
+- `stop()` — terminates Dream, cleans up socket file and threads
 
-Dream binary auto-detection order: configured path, `../DRM/dream-2.1.1-svn808/dream/dream`, `PATH`.
+Dream binary auto-detection order: configured path, `../DRM/dream-2.2/dream`, `PATH`.
 
 ### Key Constants
 
@@ -156,7 +157,7 @@ Dream binary auto-detection order: configured path, `../DRM/dream-2.1.1-svn808/d
 | AGC target RMS    | 0.3     | `dsp.py`      |
 | IQ chunk size     | 12288 B | `iq_client.py`|
 | Audio buffer      | 1 sec   | `audio.py`    |
-| DRM status interval | 1 sec | Dream patch   |
+| DRM status socket   | Unix  | `drm.py`      |
 
 ## Development Setup
 

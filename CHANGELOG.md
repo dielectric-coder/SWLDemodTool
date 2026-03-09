@@ -1,12 +1,27 @@
 # Changelog
 
+## [0.4.0] - 2026-03-09
+
+### Added
+- `--debug` CLI flag enables debug logging to `swl-demod.log`
+- DRM text message display (station text/programme info) in mode info panel
+
+### Changed
+- Upgraded Dream integration from 2.1.1 (patched stderr) to Dream 2.2 (JSON status via Unix domain socket)
+- DRM status uses `--status-socket` instead of parsing stderr `DRM|...` lines
+- DRM sync characters rendered with Rich `Text` objects (avoids markup parsing issues)
+- DRM status display skips redundant widget updates when content is unchanged
+- DRM station label styled bold yellow, text messages styled cyan
+- Removed `audio_ok`/`audio_total` fields from DRM status (not available in Dream 2.2 JSON)
+- Clean thread shutdown via `threading.Event` instead of polling `process.poll()`
+
 ## [0.3.0] - 2026-03-08
 
 ### Added
 - Synchronous AM demodulation (SAM) with PLL carrier tracking
 - Selectable sideband SAM modes: SAM-U (upper) and SAM-L (lower) for interference rejection
 - DRM (Digital Radio Mondiale) decoding via Dream subprocess integration
-- DRM status display: sync indicators (colour-coded), SNR, robustness mode, service label, bitrate, audio frame counts
+- DRM status display: sync indicators (colour-coded), SNR, robustness mode, service label, bitrate
 - Dream binary auto-detection from `../DRM/`, `PATH`, or config file
 - VFO-A/B toggle via `v` key with CAT `FR0;`/`FR1;` commands
 - VFO-B frequency query via `FB;` command

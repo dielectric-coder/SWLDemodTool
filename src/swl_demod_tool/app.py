@@ -3,6 +3,7 @@
 """SWL Demod Tool - TUI demodulator for Elad FDM-DUO IQ stream."""
 
 import argparse
+import logging
 import os
 import threading
 import numpy as np
@@ -219,6 +220,9 @@ class DemodApp(App):
 
         # CW tone hold: keep last reading visible for a short time after tone drops
         self._cw_tone_hold = 0
+
+        # DRM status change tracking
+        self._last_drm_plain = ""
 
     def compose(self):
         yield Static(id="title-bar")
@@ -451,7 +455,9 @@ class DemodApp(App):
         if mode in ("CW+", "CW-"):
             w.update(f"{self._cw_tuning_bar()}    {self._rit_str()}")
         elif mode == "DRM":
-            w.update(Text.from_markup(self._drm_status_line()))
+            t = self._drm_status_text()
+            if t is not None:
+                w.update(t)
         elif mode in ("SAM", "SAM-U", "SAM-L"):
             offset = self.demod.get_pll_offset_hz()
             sign = "+" if offset >= 0 else "-"
@@ -461,32 +467,45 @@ class DemodApp(App):
         else:
             w.update("")
 
-    def _drm_status_line(self):
+    _SYNC_STYLES = {"O": "green", "X": "red", "*": "yellow", "-": "#888888"}
+
+    def _drm_status_text(self):
+        """Build DRM status as a Text object (avoids markup parsing)."""
         st = self.drm.get_status()
-        sync = st["sync"]
-        sync_rich = ""
-        for c in sync:
-            if c == "O":
-                sync_rich += "[green]O[/]"
-            elif c == "X":
-                sync_rich += "[red]X[/]"
-            elif c == "*":
-                sync_rich += "[yellow]*[/]"
-            else:
-                sync_rich += "[#888888]-[/]"
+        parts = [f"   Sync: {st['sync']}"]
         if st["signal"]:
-            detail = (
-                f"  SNR: {st['snr']:.1f} dB"
-                f"    Mode: {st['mode']}"
-            )
+            parts.append(f"  SNR: {st['snr']:.1f} dB    Mode: {st['mode']}")
             if st["label"]:
-                detail += f"    [{st['label']}]"
+                parts.append(f"    Station: {st['label']}")
             if st["bitrate"] > 0:
-                detail += f"    {st['bitrate']:.1f} kbps"
-            detail += f"    Audio: {st['audio_ok']}/{st['audio_total']}"
+                parts.append(f"    {st['bitrate']:.1f} kbps")
+            if st.get("text"):
+                parts.append(f"\n   {st['text']}")
         else:
-            detail = "  Acquiring..."
-        return f"   Sync: {sync_rich}{detail}"
+            parts.append("  Acquiring...")
+        plain = "".join(parts)
+
+        # Skip widget update if nothing changed
+        if plain == self._last_drm_plain:
+            return None
+        self._last_drm_plain = plain
+
+        t = Text("   Sync: ")
+        for c in st["sync"]:
+            t.append(c, style=self._SYNC_STYLES.get(c, "#888888"))
+        if st["signal"]:
+            t.append(f"  SNR: {st['snr']:.1f} dB    Mode: {st['mode']}")
+            if st["label"]:
+                t.append("    Station: ")
+                t.append(st["label"], style="bold yellow")
+            if st["bitrate"] > 0:
+                t.append(f"    {st['bitrate']:.1f} kbps")
+            if st.get("text"):
+                t.append("\n   ")
+                t.append(st["text"], style="cyan")
+        else:
+            t.append("  Acquiring...")
+        return t
 
     def _update_status(self):
         bar = self.query_one("#status-bar", Static)
@@ -809,7 +828,13 @@ def main():
     parser.add_argument("--cat-port", type=int, default=None, help="CAT server port")
     parser.add_argument("--audio-device", default=None, help="Audio output device")
     parser.add_argument("--version", action="version", version=f"swl-demod {__version__}")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging to swl-demod.log")
     args = parser.parse_args()
+
+    if args.debug:
+        logging.basicConfig(
+            filename="swl-demod.log", level=logging.DEBUG,
+            format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
     config = load_config()
     host = args.host or config.get("server", "host")
