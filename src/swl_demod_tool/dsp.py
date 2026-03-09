@@ -59,11 +59,11 @@ def spectrum_to_sparkline(db_values, width=60, height=5, min_db=-120.0, max_db=-
 # ---------------------------------------------------------------------------
 
 class Demodulator:
-    """AM/SSB/SAM demodulator with decimation, DC removal, and AGC.
+    """AM/SSB/SAM/CW demodulator with decimation, DC removal, and AGC.
 
     Pipeline: IQ (192 kHz) → lowpass → decimate (÷4) → detect → DC remove → AGC → audio (48 kHz)
     Detection: AM = envelope (magnitude), USB/LSB = product detector (real part),
-               SAM = PLL synchronous detection.
+               SAM = PLL synchronous detection, CW = product detector + BFO tone.
     """
 
     def __init__(self, iq_sample_rate=192000, audio_rate=48000, bandwidth=5000):
@@ -71,7 +71,7 @@ class Demodulator:
         self.audio_rate = audio_rate
         self.decimation = iq_sample_rate // audio_rate  # 4
         self.bandwidth = bandwidth
-        self.mode = "AM"  # "AM", "SAM", "SAM-U", "SAM-L", "USB", "LSB"
+        self.mode = "AM"  # "AM", "SAM", "SAM-U", "SAM-L", "USB", "LSB", "CW+", "CW-"
 
         # Design lowpass FIR filter for anti-alias before decimation
         # Cutoff at bandwidth relative to Nyquist (iq_sample_rate/2)
@@ -104,15 +104,54 @@ class Demodulator:
         self._pll_alpha = 0.005     # Proportional gain
         self._pll_beta = 1.5e-5     # Integral gain
 
+        # BFO state for CW modes
+        self._bfo_offset = 700.0    # BFO tone frequency in Hz
+        self._bfo_phase = 0.0       # Phase accumulator (radians)
+
+        # Post-decimation audio-rate filter for CW (narrow BW at 48 kHz is effective)
+        self._cw_taps = None
+        self._cw_zi_i = None
+        self._cw_zi_q = None
+        self._cw_peak_hz = 0.0      # Smoothed peak audio frequency (Hz)
+        self._cw_tone_present = False  # Whether a tone is detected above noise
+        self._cw_snr_db = 0.0         # Tone SNR in dB
+        self._cw_fft_size = 8192
+        self._cw_buf = np.zeros(self._cw_fft_size, dtype=np.float32)
+
+        # CW speed measurement (envelope-based keying detector)
+        self._cw_env = 0.0           # Smoothed envelope level
+        self._cw_env_peak = 0.0      # Peak envelope (for adaptive threshold)
+        self._cw_key_down = False     # Current key state
+        self._cw_edge_sample = 0     # Sample count at last edge
+        self._cw_sample_count = 0    # Running sample counter
+        self._cw_element_ms = []     # Recent on-duration measurements (ms)
+        self._cw_wpm = 0.0           # Estimated speed in WPM
+
+    def _update_cw_filter(self):
+        """Rebuild the post-decimation audio-rate lowpass for CW modes."""
+        num_taps = 255
+        self._cw_taps = firwin(num_taps, self.bandwidth, fs=self.audio_rate).astype(np.float32)
+        self._cw_zi_i = lfilter_zi(self._cw_taps, 1.0).astype(np.float32) * 0
+        self._cw_zi_q = lfilter_zi(self._cw_taps, 1.0).astype(np.float32) * 0
+
     def set_bandwidth(self, bandwidth):
         """Update the demodulation bandwidth (Hz)."""
         if bandwidth == self.bandwidth:
             return
         self.bandwidth = max(100, min(bandwidth, self.iq_sample_rate // 2 - 1))
-        num_taps = 127
-        self._lp_taps = firwin(num_taps, self.bandwidth, fs=self.iq_sample_rate).astype(np.float32)
-        self._lp_zi_i = lfilter_zi(self._lp_taps, 1.0).astype(np.float32) * 0
-        self._lp_zi_q = lfilter_zi(self._lp_taps, 1.0).astype(np.float32) * 0
+        if self.mode in ("CW+", "CW-"):
+            # CW: wide pre-decimation anti-alias filter, narrow post-decimation audio filter
+            cw_prefilter = 2400
+            num_taps = 127
+            self._lp_taps = firwin(num_taps, cw_prefilter, fs=self.iq_sample_rate).astype(np.float32)
+            self._lp_zi_i = lfilter_zi(self._lp_taps, 1.0).astype(np.float32) * 0
+            self._lp_zi_q = lfilter_zi(self._lp_taps, 1.0).astype(np.float32) * 0
+            self._update_cw_filter()
+        else:
+            num_taps = 127
+            self._lp_taps = firwin(num_taps, self.bandwidth, fs=self.iq_sample_rate).astype(np.float32)
+            self._lp_zi_i = lfilter_zi(self._lp_taps, 1.0).astype(np.float32) * 0
+            self._lp_zi_q = lfilter_zi(self._lp_taps, 1.0).astype(np.float32) * 0
 
     def process(self, iq_samples):
         """Demodulate AM/SSB from complex IQ samples.
@@ -135,7 +174,63 @@ class Demodulator:
         q_dec = q_filt[::self.decimation]
 
         # Detection
-        if self.mode in ("USB", "LSB"):
+        if self.mode in ("CW+", "CW-"):
+            # CW: narrow audio-rate lowpass on I/Q, then BFO mix to audible tone
+            if self._cw_taps is not None:
+                i_dec, self._cw_zi_i = lfilter(self._cw_taps, 1.0, i_dec, zi=self._cw_zi_i)
+                q_dec, self._cw_zi_q = lfilter(self._cw_taps, 1.0, q_dec, zi=self._cw_zi_q)
+            sign = 1.0 if self.mode == "CW+" else -1.0
+            n = len(i_dec)
+            phase_inc = 2.0 * np.pi * sign * self._bfo_offset / self.audio_rate
+            phases = self._bfo_phase + phase_inc * np.arange(n)
+            self._bfo_phase = (phases[-1] + phase_inc) % (2.0 * np.pi)
+            complex_dec = i_dec + 1j * q_dec
+            detected = np.real(complex_dec * np.exp(1j * phases)).astype(np.float32)
+            # Accumulate samples for tone measurement
+            self._cw_buf = np.roll(self._cw_buf, -n)
+            self._cw_buf[-n:] = detected[:n]
+            # Measure peak audio frequency for tuning indicator
+            fft_n = self._cw_fft_size
+            bin_hz = self.audio_rate / fft_n  # ~5.9 Hz/bin
+            win = np.hanning(fft_n).astype(np.float32)
+            spec = np.abs(np.fft.rfft(self._cw_buf * win)) ** 2
+            # Only look within the passband (BFO ± bandwidth)
+            lo = max(1, int((self._bfo_offset - self.bandwidth) / bin_hz))
+            hi = min(len(spec) - 1, int((self._bfo_offset + self.bandwidth) / bin_hz))
+            passband = spec[lo:hi + 1]
+            pk = np.argmax(passband)
+            pk_abs = lo + pk  # absolute bin index
+            # Spectral concentration within passband only
+            total = np.sum(passband)
+            tone = False
+            if total > 0 and len(passband) > 2:
+                tone = passband[pk] / total > 0.25
+            self._cw_tone_present = tone
+            if tone and pk_abs > 0 and pk_abs < len(spec) - 1:
+                # SNR: tone power (peak ± 1 bin) vs noise (rest of passband)
+                tone_bins = set(range(max(pk - 1, 0), min(pk + 2, len(passband))))
+                noise = np.array([passband[i] for i in range(len(passband)) if i not in tone_bins])
+                if len(noise) > 0:
+                    noise_mean = np.mean(noise)
+                    if noise_mean > 0:
+                        snr = 10.0 * np.log10(passband[pk] / noise_mean)
+                        self._cw_snr_db = 0.8 * self._cw_snr_db + 0.2 * snr
+                # Parabolic interpolation for sub-bin accuracy
+                a = spec[pk_abs - 1]
+                b = spec[pk_abs]
+                c = spec[pk_abs + 1]
+                denom = a - 2.0 * b + c
+                delta = 0.5 * (a - c) / denom if abs(denom) > 1e-20 else 0.0
+                peak_hz = (pk_abs + delta) * bin_hz
+                if self._cw_peak_hz == 0.0:
+                    self._cw_peak_hz = peak_hz
+                else:
+                    self._cw_peak_hz = 0.85 * self._cw_peak_hz + 0.15 * peak_hz
+            else:
+                self._cw_snr_db *= 0.8  # decay toward 0 when no tone
+            # Speed measurement: envelope-based keying detector
+            self._cw_measure_speed(detected)
+        elif self.mode in ("USB", "LSB"):
             # SSB product detector: real part of the complex baseband signal
             detected = i_dec.astype(np.float32)
         elif self.mode in ("SAM", "SAM-U", "SAM-L"):
@@ -192,6 +287,98 @@ class Demodulator:
             return 20.0 * np.log10(self._agc_gain)
         return -120.0
 
+    def _cw_measure_speed(self, audio):
+        """Detect CW keying envelope and estimate speed in WPM.
+
+        Uses sample-level envelope detection for precise edge timing,
+        median-based dit estimation, and exponential WPM smoothing.
+        """
+        abs_audio = np.abs(audio)
+        # Envelope attack/decay constants (per-sample at 48 kHz)
+        attack = 0.04    # ~0.5 ms attack
+        decay = 0.002    # ~10 ms decay
+        env = self._cw_env
+        for i in range(len(abs_audio)):
+            s = abs_audio[i]
+            if s > env:
+                env += attack * (s - env)
+            else:
+                env += decay * (s - env)
+            # Track peak with slow decay
+            if env > self._cw_env_peak:
+                self._cw_env_peak = env
+            else:
+                self._cw_env_peak *= 0.99998  # ~1 second decay at 48 kHz
+            # Adaptive threshold at 40% of peak
+            threshold = self._cw_env_peak * 0.4
+            key_now = env > threshold and self._cw_env_peak > 1e-8
+            sample_pos = self._cw_sample_count + i
+            if self._cw_key_down and not key_now:
+                # Key-up edge: measure on-duration
+                dur_ms = (sample_pos - self._cw_edge_sample) * 1000.0 / self.audio_rate
+                if 15 < dur_ms < 2000:
+                    self._cw_element_ms.append(dur_ms)
+                    if len(self._cw_element_ms) > 60:
+                        self._cw_element_ms = self._cw_element_ms[-60:]
+                    self._cw_update_wpm()
+                self._cw_edge_sample = sample_pos
+            elif not self._cw_key_down and key_now:
+                self._cw_edge_sample = sample_pos
+            self._cw_key_down = key_now
+        self._cw_env = env
+        self._cw_sample_count += len(audio)
+
+    def _cw_update_wpm(self):
+        """Estimate WPM from collected element durations."""
+        if len(self._cw_element_ms) < 4:
+            return
+        sorted_ms = sorted(self._cw_element_ms)
+        # Iterative split: start with median as boundary, refine
+        boundary = sorted_ms[len(sorted_ms) // 2]
+        for _ in range(5):
+            dits = [d for d in sorted_ms if d < boundary]
+            dahs = [d for d in sorted_ms if d >= boundary]
+            if not dits or not dahs:
+                break
+            dit_med = sorted(dits)[len(dits) // 2]
+            dah_med = sorted(dahs)[len(dahs) // 2]
+            boundary = (dit_med + dah_med) / 2.0
+        # Final dit estimate: median of elements below boundary
+        dits = [d for d in sorted_ms if d < boundary]
+        if not dits:
+            dits = sorted_ms[:len(sorted_ms) // 2]
+        if dits:
+            dit_ms = sorted(dits)[len(dits) // 2]  # median
+            if dit_ms > 0:
+                new_wpm = 1200.0 / dit_ms
+                # Exponential smoothing on WPM
+                if self._cw_wpm == 0.0:
+                    self._cw_wpm = new_wpm
+                else:
+                    self._cw_wpm = 0.8 * self._cw_wpm + 0.2 * new_wpm
+
+    def get_cw_peak_hz(self):
+        """Return the smoothed peak audio frequency in CW mode."""
+        return self._cw_peak_hz
+
+    def get_cw_tone_present(self):
+        """Return whether a CW tone is detected above the noise floor."""
+        return self._cw_tone_present
+
+    def get_cw_snr_db(self):
+        """Return CW tone SNR in dB."""
+        return self._cw_snr_db
+
+    def get_cw_wpm(self):
+        """Return estimated CW speed in words per minute."""
+        return self._cw_wpm
+
+    def get_pll_offset_hz(self):
+        """Return PLL tracking offset in Hz (0.0 for non-SAM modes)."""
+        if self.mode not in ("SAM", "SAM-U", "SAM-L"):
+            return 0.0
+        return self._pll_freq * self.audio_rate / (2.0 * np.pi)
+
     def _pll_detect(self, i_samples, q_samples, mode="SAM"):
         """PLL-based synchronous AM detection.
 
@@ -247,3 +434,18 @@ class Demodulator:
         self._agc_gain = 100.0
         self._pll_phase = 0.0
         self._pll_freq = 0.0
+        self._bfo_phase = 0.0
+        self._cw_buf[:] = 0.0
+        self._cw_peak_hz = 0.0
+        self._cw_tone_present = False
+        self._cw_snr_db = 0.0
+        self._cw_env = 0.0
+        self._cw_env_peak = 0.0
+        self._cw_key_down = False
+        self._cw_edge_sample = 0
+        self._cw_sample_count = 0
+        self._cw_element_ms = []
+        self._cw_wpm = 0.0
+        if self._cw_taps is not None:
+            self._cw_zi_i = lfilter_zi(self._cw_taps, 1.0).astype(np.float32) * 0
+            self._cw_zi_q = lfilter_zi(self._cw_taps, 1.0).astype(np.float32) * 0

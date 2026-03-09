@@ -8,7 +8,7 @@ src/swl_demod_tool/
     app.py            # Textual TUI application (entry point: main())
     iq_client.py      # TCP client for IQ sample stream
     cat_client.py     # TCP client for CAT radio control
-    dsp.py            # DSP: FFT spectrum, sparkline rendering, AM/SSB demodulator
+    dsp.py            # DSP: FFT spectrum, sparkline rendering, AM/SSB/CW demodulator
     drm.py            # DRM decoder integration (Dream subprocess)
     audio.py          # Audio output via sounddevice with ring buffer
     config.py         # INI config file handling
@@ -96,7 +96,7 @@ Mode codes in IF response (char 29): 1=LSB, 2=USB, 3=CW, 4=FM, 5=AM, 7=CW-R
 - Peak-hold downsampling (max per display bin) to preserve narrow signals
 - Multi-row Unicode block character rendering
 
-**AM/SAM/SSB demodulation:**
+**AM/SAM/SSB/CW demodulation:**
 ```
 IQ (192 kHz) -> FIR lowpass (127-tap, scipy firwin)
              -> decimate (divide by 4)
@@ -106,6 +106,7 @@ IQ (192 kHz) -> FIR lowpass (127-tap, scipy firwin)
                   SAM-U = PLL coherent (dot + cross)
                   SAM-L = PLL coherent (dot - cross)
                   USB/LSB = product (I channel)
+                  CW+/CW- = audio-rate lowpass (255-tap) -> BFO mix (±700 Hz)
              -> DC removal (smoothed mean subtraction)
              -> AGC (block-based, fast attack / slow decay)
              -> volume / mute
@@ -114,6 +115,14 @@ IQ (192 kHz) -> FIR lowpass (127-tap, scipy firwin)
 ```
 
 **SAM PLL:** PI loop filter (~30 Hz bandwidth at 48 kHz) with atan2-normalized phase error. Tracks carrier drift without following audio modulation.
+
+**CW BFO:** 700 Hz tone offset mixed with the decimated complex signal. CW+ shifts up (+700 Hz, upper sideband), CW- shifts down (-700 Hz, lower sideband). Phase accumulator persists across chunks for glitch-free output. Default bandwidth 500 Hz (adjustable 100-1000 Hz). CW uses a two-stage filter: wide 2400 Hz pre-decimation anti-alias (127-tap at 192 kHz), then narrow post-decimation audio-rate lowpass (255-tap at 48 kHz) applied to I/Q before BFO mixing.
+
+**CW tone analysis:** An 8192-sample rolling buffer feeds an FFT for tone detection (~5.9 Hz/bin). Tone presence is determined by spectral concentration within the BFO ± bandwidth passband (threshold 0.25). Peak frequency uses parabolic interpolation for sub-bin accuracy, with exponential smoothing. SNR is measured as peak-to-noise ratio within the passband.
+
+**CW speed measurement:** Sample-level envelope detection (attack ~0.5 ms, decay ~10 ms) with adaptive threshold at 40% of peak. Key-down durations are collected and clustered using iterative dit/dah separation. WPM is estimated from median dit duration (standard: 1200 / dit_ms). Exponential smoothing on the WPM output for stability.
+
+**RIT:** 10 Hz tuning steps via PgUp/PgDn in SSB/CW modes. Cumulative offset tracked and displayed; resets on coarse/fine tuning or mode change.
 
 ### DRM Integration
 

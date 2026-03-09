@@ -15,7 +15,13 @@
 ### Changed
 - Frequency input consolidated to a single field, moved to top of UI (tunes active VFO)
 - AM default bandwidth changed to 5000 Hz, minimum lowered to 4000 Hz
-- Mode cycling: AM → SAM → SAM-U → SAM-L → USB → LSB → DRM → AM
+- Mode cycling: AM → SAM → SAM-U → SAM-L → USB → LSB → CW+ → CW- → DRM → AM
+- CW (Morse code) demodulation with 700 Hz BFO tone offset: CW+ (upper sideband) and CW- (lower sideband), 500 Hz default bandwidth (100-1000 Hz adjustable), two-stage filtering (pre-decimation anti-alias + post-decimation audio-rate narrow filter)
+- CW tuning indicator with center-zero bar (±150 Hz range), tone SNR, and keying speed estimation (WPM)
+- RIT tuning via PgUp/PgDn (10 Hz steps) for SSB and CW modes, with offset display
+- Mode info panel: dedicated area below audio info for mode-specific indicators (CW tuning/SNR/WPM/RIT, DRM sync/status, SAM PLL offset, SSB RIT)
+- DRM status display moved from radio info line to mode info panel
+- SAM PLL offset display moved from radio info line to mode info panel
 - Demod mode and bandwidth are fully local — no longer polled from the radio
 - CAT polling is VFO-aware: queries active VFO's frequency via `FA;` or `FB;`
 - Tuning controls tune the active VFO (VFO-A or VFO-B)

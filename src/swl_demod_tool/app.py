@@ -101,9 +101,17 @@ Screen {
 }
 
 #audio-info {
-    height: 5;
+    height: 4;
     background: black;
     color: #a3aed2;
+    padding: 0 2;
+    border-bottom: solid #394260;
+}
+
+#mode-info {
+    height: 2;
+    background: black;
+    color: #c0a36e;
     padding: 0 2;
     border-bottom: solid #394260;
 }
@@ -167,11 +175,14 @@ class DemodApp(App):
         ("x", "cycle_mode", "Mode"),
         ("alt+right", "fine_tune_up", "Fine+"),
         ("alt+left", "fine_tune_down", "Fine-"),
+        ("pageup", "rit_up", "RIT+"),
+        ("pagedown", "rit_down", "RIT-"),
         ("v", "toggle_vfo", "VFO"),
     ]
 
     utc_display = reactive("--:-- UTC")
     frequency_hz = reactive(0)
+    rit_offset = reactive(0)  # Cumulative RIT offset in Hz
 
     active_vfo = reactive("--")
     peak_db = reactive(-120.0)
@@ -206,6 +217,9 @@ class DemodApp(App):
         # Spectrum zoom: fraction of full bandwidth shown (1.0 = full, 0.0625 = 1/16)
         self._spectrum_zoom = 1.0
 
+        # CW tone hold: keep last reading visible for a short time after tone drops
+        self._cw_tone_hold = 0
+
     def compose(self):
         yield Static(id="title-bar")
         with Horizontal(id="freq-bar"):
@@ -218,6 +232,7 @@ class DemodApp(App):
         yield Static(id="radio-info")
         yield Static(id="spectrum-display")
         yield Static(id="audio-info")
+        yield Static(id="mode-info")
         yield Static(id="status-bar", markup=True)
         yield Footer()
 
@@ -241,6 +256,7 @@ class DemodApp(App):
         self._update_conn_status()
         self._update_radio_info()
         self._update_spectrum()
+        self._update_mode_info()
         self._update_audio_info()
         self._update_status()
 
@@ -254,7 +270,9 @@ class DemodApp(App):
     def _update_displays(self):
         """Periodic UI refresh for fast-changing displays."""
         self._update_spectrum()
+        self._update_mode_info()
         self._update_audio_info()
+        self._update_radio_info()
 
     def _update_title(self):
         bar = self.query_one("#title-bar", Static)
@@ -281,35 +299,7 @@ class DemodApp(App):
         w = self.query_one("#radio-info", Static)
         vfo = self.active_vfo
         mode = self.demod.mode
-        if mode == "DRM":
-            st = self.drm.get_status()
-            sync = st["sync"]
-            # Colour sync chars: O=green X=red *=yellow -=dim
-            sync_rich = ""
-            for c in sync:
-                if c == "O":
-                    sync_rich += "[green]O[/]"
-                elif c == "X":
-                    sync_rich += "[red]X[/]"
-                elif c == "*":
-                    sync_rich += "[yellow]*[/]"
-                else:
-                    sync_rich += "[#888888]-[/]"
-            if st["signal"]:
-                drm_detail = (
-                    f"  SNR: {st['snr']:.1f} dB"
-                    f"    Mode: {st['mode']}"
-                )
-                if st["label"]:
-                    drm_detail += f"    [{st['label']}]"
-                if st["bitrate"] > 0:
-                    drm_detail += f"    {st['bitrate']:.1f} kbps"
-                drm_detail += f"    Audio: {st['audio_ok']}/{st['audio_total']}"
-            else:
-                drm_detail = "  Acquiring..."
-            bw_str = f"DRM  Sync: {sync_rich}{drm_detail}"
-        else:
-            bw_str = f"BW: {self.demod.bandwidth} Hz"
+        bw_str = f"BW: {self.demod.bandwidth} Hz"
         if self.frequency_hz > 0:
             freq_mhz = self.frequency_hz / 1e6
             text = f"  VFO: {vfo}    Frequency: {freq_mhz:.6f} MHz    Mode: {mode}    {bw_str}"
@@ -376,6 +366,37 @@ class DemodApp(App):
             f"  {'':>{center - len(freq_str)//2}}{freq_str}{'':>{max(1, width - center - len(freq_str)//2 - len(span_str))}}{span_str}"
         )
 
+    def _cw_tuning_bar(self, width=20):
+        """Build a center-zero tuning indicator for CW mode."""
+        center = width // 2
+        bar = list("░" * width)
+        bar[center] = "│"  # center mark (on-tune target)
+        wpm = self.demod.get_cw_wpm()
+        wpm_str = f"{wpm:2.0f} WPM" if wpm > 0 else "-- WPM"
+        if self.demod.get_cw_tone_present():
+            self._cw_tone_hold = 10  # ~1 second at 100ms refresh
+        elif self._cw_tone_hold > 0:
+            self._cw_tone_hold -= 1
+        if self._cw_tone_hold <= 0:
+            self.demod._cw_wpm = 0.0
+            self.demod._cw_element_ms = []
+            return f"   Tune: [{''.join(bar)}] - ---.- Hz    SNR: -- dB    -- WPM"
+        peak = self.demod.get_cw_peak_hz()
+        target = self.demod._bfo_offset  # 700 Hz
+        deviation = peak - target  # Hz off from ideal
+        # Map deviation to bar position: ±150 Hz range, center = on-tune
+        max_dev = 150.0
+        norm = max(-1.0, min(1.0, deviation / max_dev))
+        pos = center + int(norm * center)
+        pos = max(0, min(width - 1, pos))
+        bar[pos] = "█"     # actual peak position
+        snr = self.demod.get_cw_snr_db()
+        sign = "+" if deviation >= 0 else "-"
+        abs_dev = abs(deviation)
+        tune_str = f"{sign}{abs_dev:6.1f}"
+        snr_str = f"{snr:2.0f}"
+        return f"   Tune: [{''.join(bar)}] {tune_str} Hz    SNR: {snr_str} dB    {wpm_str}"
+
     def _update_audio_info(self):
         w = self.query_one("#audio-info", Static)
 
@@ -417,9 +438,59 @@ class DemodApp(App):
         )
         w.update(text)
 
+    def _rit_str(self):
+        """Format RIT offset for display."""
+        if self.rit_offset == 0:
+            return "RIT:    0 Hz"
+        sign = "+" if self.rit_offset > 0 else "-"
+        return f"RIT: {sign}{abs(self.rit_offset):3d} Hz"
+
+    def _update_mode_info(self):
+        w = self.query_one("#mode-info", Static)
+        mode = self.demod.mode
+        if mode in ("CW+", "CW-"):
+            w.update(f"{self._cw_tuning_bar()}    {self._rit_str()}")
+        elif mode == "DRM":
+            w.update(Text.from_markup(self._drm_status_line()))
+        elif mode in ("SAM", "SAM-U", "SAM-L"):
+            offset = self.demod.get_pll_offset_hz()
+            sign = "+" if offset >= 0 else "-"
+            w.update(f"   PLL Offset: {sign}{abs(offset):6.1f} Hz")
+        elif mode in ("USB", "LSB"):
+            w.update(f"   {self._rit_str()}")
+        else:
+            w.update("")
+
+    def _drm_status_line(self):
+        st = self.drm.get_status()
+        sync = st["sync"]
+        sync_rich = ""
+        for c in sync:
+            if c == "O":
+                sync_rich += "[green]O[/]"
+            elif c == "X":
+                sync_rich += "[red]X[/]"
+            elif c == "*":
+                sync_rich += "[yellow]*[/]"
+            else:
+                sync_rich += "[#888888]-[/]"
+        if st["signal"]:
+            detail = (
+                f"  SNR: {st['snr']:.1f} dB"
+                f"    Mode: {st['mode']}"
+            )
+            if st["label"]:
+                detail += f"    [{st['label']}]"
+            if st["bitrate"] > 0:
+                detail += f"    {st['bitrate']:.1f} kbps"
+            detail += f"    Audio: {st['audio_ok']}/{st['audio_total']}"
+        else:
+            detail = "  Acquiring..."
+        return f"   Sync: {sync_rich}{detail}"
+
     def _update_status(self):
         bar = self.query_one("#status-bar", Static)
-        bar.update("  c:Connect  d:Disc  r:Recon  m:Mute  a:AGC  x:Mode  v:VFO  +/-:Vol  \\[/]:BW  ←/→:Tune  S-←/→:Zoom  /:Freq")
+        bar.update("  c:Connect  d:Disc  r:Recon  m:Mute  a:AGC  x:Mode  v:VFO  +/-:Vol  \\[/]:BW  ←/→:Tune  PgU/D:RIT  S-←/→:Zoom  /:Freq")
 
     # --- IQ data callback (from network thread) ---
 
@@ -553,8 +624,8 @@ class DemodApp(App):
         self._update_audio_info()
 
     def action_cycle_mode(self):
-        """Cycle demodulation mode: AM → SAM → SAM-U → SAM-L → USB → LSB → DRM → AM."""
-        modes = ["AM", "SAM", "SAM-U", "SAM-L", "USB", "LSB", "DRM"]
+        """Cycle demodulation mode: AM → SAM → SAM-U → SAM-L → USB → LSB → CW+ → CW- → DRM → AM."""
+        modes = ["AM", "SAM", "SAM-U", "SAM-L", "USB", "LSB", "CW+", "CW-", "DRM"]
         old_mode = self.demod.mode
         idx = modes.index(old_mode) if old_mode in modes else 0
         new_mode = modes[(idx + 1) % len(modes)]
@@ -571,8 +642,9 @@ class DemodApp(App):
 
         self.demod.mode = new_mode
         self.demod.reset()
+        self.rit_offset = 0
         # Set default bandwidth for the new mode
-        defaults = {"AM": 5000, "SAM": 5000, "SAM-U": 5000, "SAM-L": 5000, "USB": 2400, "LSB": 2400}
+        defaults = {"AM": 5000, "SAM": 5000, "SAM-U": 5000, "SAM-L": 5000, "USB": 2400, "LSB": 2400, "CW+": 500, "CW-": 500}
         if new_mode in defaults:
             self.demod.set_bandwidth(defaults[new_mode])
         self._update_radio_info()
@@ -591,6 +663,8 @@ class DemodApp(App):
             return 4000, 10000, 1000
         elif self.demod.mode in ("USB", "LSB"):
             return 1200, 3200, 100
+        elif self.demod.mode in ("CW+", "CW-"):
+            return 100, 1000, 50
         return 100, 24000, 500  # fallback
 
     def action_bw_up(self):
@@ -620,18 +694,34 @@ class DemodApp(App):
     def action_tune_up(self):
         """Fine tune up by tune_step Hz."""
         self._tune_offset(self.tune_step)
+        self.rit_offset = 0
 
     def action_tune_down(self):
         """Fine tune down by tune_step Hz."""
         self._tune_offset(-self.tune_step)
+        self.rit_offset = 0
 
     def action_fine_tune_up(self):
         """Fine tune up by 100 Hz."""
         self._tune_offset(100)
+        self.rit_offset = 0
 
     def action_fine_tune_down(self):
         """Fine tune down by 100 Hz."""
         self._tune_offset(-100)
+        self.rit_offset = 0
+
+    def action_rit_up(self):
+        """RIT tune up by 10 Hz (SSB/CW modes)."""
+        if self.demod.mode in ("USB", "LSB", "CW+", "CW-"):
+            self._tune_offset(10)
+            self.rit_offset += 10
+
+    def action_rit_down(self):
+        """RIT tune down by 10 Hz (SSB/CW modes)."""
+        if self.demod.mode in ("USB", "LSB", "CW+", "CW-"):
+            self._tune_offset(-10)
+            self.rit_offset -= 10
 
     def action_toggle_vfo(self):
         """Switch between VFO-A and VFO-B."""
