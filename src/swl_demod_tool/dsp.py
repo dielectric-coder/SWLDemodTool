@@ -3,6 +3,22 @@
 import numpy as np
 from scipy.signal import firwin, lfilter, lfilter_zi
 
+# International Morse Code lookup: dit/dah sequence -> character
+_MORSE_TABLE = {
+    ".-": "A", "-...": "B", "-.-.": "C", "-..": "D", ".": "E",
+    "..-.": "F", "--.": "G", "....": "H", "..": "I", ".---": "J",
+    "-.-": "K", ".-..": "L", "--": "M", "-.": "N", "---": "O",
+    ".--.": "P", "--.-": "Q", ".-.": "R", "...": "S", "-": "T",
+    "..-": "U", "...-": "V", ".--": "W", "-..-": "X", "-.--": "Y",
+    "--..": "Z", ".----": "1", "..---": "2", "...--": "3",
+    "....-": "4", ".....": "5", "-....": "6", "--...": "7",
+    "---..": "8", "----.": "9", "-----": "0", ".-.-.-": ".",
+    "--..--": ",", "..--..": "?", ".----.": "'", "-.-.--": "!",
+    "-..-.": "/", "-.--.": "(", "-.--.-": ")", ".-...": "&",
+    "---...": ":", "-.-.-.": ";", "-...-": "=", ".-.-.": "+",
+    "-....-": "-", "..--.-": "_", ".-..-.": '"', ".--.-.": "@",
+}
+
 
 def compute_spectrum_db(iq_samples, fft_size=4096):
     """Compute power spectrum in dB from IQ samples.
@@ -126,6 +142,12 @@ class Demodulator:
         self._cw_sample_count = 0    # Running sample counter
         self._cw_element_ms = []     # Recent on-duration measurements (ms)
         self._cw_wpm = 0.0           # Estimated speed in WPM
+
+        # CW decoder state
+        self._cw_current_char = []   # Current element sequence ('.' and '-')
+        self._cw_decoded_text = ""   # Decoded text buffer (last ~120 chars)
+        self._cw_last_keyup_sample = 0  # Sample at last key-up edge
+        self._cw_dit_ms = 0.0        # Current dit duration estimate (ms)
 
     def _update_cw_filter(self):
         """Rebuild the post-decimation audio-rate lowpass for CW modes."""
@@ -288,10 +310,11 @@ class Demodulator:
         return -120.0
 
     def _cw_measure_speed(self, audio):
-        """Detect CW keying envelope and estimate speed in WPM.
+        """Detect CW keying envelope, estimate speed, and decode Morse.
 
         Uses sample-level envelope detection for precise edge timing,
-        median-based dit estimation, and exponential WPM smoothing.
+        median-based dit estimation, exponential WPM smoothing, and
+        element-to-character decoding with space detection.
         """
         abs_audio = np.abs(audio)
         # Envelope attack/decay constants (per-sample at 48 kHz)
@@ -314,19 +337,43 @@ class Demodulator:
             key_now = env > threshold and self._cw_env_peak > 1e-8
             sample_pos = self._cw_sample_count + i
             if self._cw_key_down and not key_now:
-                # Key-up edge: measure on-duration
+                # Key-up edge: measure on-duration, classify as dit or dah
                 dur_ms = (sample_pos - self._cw_edge_sample) * 1000.0 / self.audio_rate
                 if 15 < dur_ms < 2000:
                     self._cw_element_ms.append(dur_ms)
                     if len(self._cw_element_ms) > 60:
                         self._cw_element_ms = self._cw_element_ms[-60:]
                     self._cw_update_wpm()
+                    # Classify element and append to current character
+                    if self._cw_dit_ms > 0:
+                        if dur_ms < self._cw_dit_ms * 2.0:
+                            self._cw_current_char.append(".")
+                        else:
+                            self._cw_current_char.append("-")
+                self._cw_last_keyup_sample = sample_pos
                 self._cw_edge_sample = sample_pos
             elif not self._cw_key_down and key_now:
+                # Key-down edge: check off-duration for char/word space
+                if self._cw_dit_ms > 0 and self._cw_last_keyup_sample > 0:
+                    off_ms = (sample_pos - self._cw_last_keyup_sample) * 1000.0 / self.audio_rate
+                    if off_ms > self._cw_dit_ms * 5.0 and self._cw_current_char:
+                        # Word space: decode char, then add space
+                        self._cw_decode_char()
+                        self._cw_append_text(" ")
+                    elif off_ms > self._cw_dit_ms * 2.5 and self._cw_current_char:
+                        # Character space: decode accumulated elements
+                        self._cw_decode_char()
                 self._cw_edge_sample = sample_pos
             self._cw_key_down = key_now
         self._cw_env = env
         self._cw_sample_count += len(audio)
+        # Flush pending character if silence has been long enough
+        if (not self._cw_key_down and self._cw_dit_ms > 0
+                and self._cw_current_char and self._cw_last_keyup_sample > 0):
+            silence_ms = (self._cw_sample_count - self._cw_last_keyup_sample) * 1000.0 / self.audio_rate
+            if silence_ms > self._cw_dit_ms * 5.0:
+                self._cw_decode_char()
+                self._cw_append_text(" ")
 
     def _cw_update_wpm(self):
         """Estimate WPM from collected element durations."""
@@ -356,6 +403,29 @@ class Demodulator:
                     self._cw_wpm = new_wpm
                 else:
                     self._cw_wpm = 0.8 * self._cw_wpm + 0.2 * new_wpm
+                # Update dit duration for decoder thresholds
+                if self._cw_dit_ms == 0.0:
+                    self._cw_dit_ms = dit_ms
+                else:
+                    self._cw_dit_ms = 0.8 * self._cw_dit_ms + 0.2 * dit_ms
+
+    def _cw_decode_char(self):
+        """Decode the current element buffer into a character."""
+        code = "".join(self._cw_current_char)
+        self._cw_current_char.clear()
+        if code:
+            ch = _MORSE_TABLE.get(code, "\u2423")  # ␣ for unknown
+            self._cw_append_text(ch)
+
+    def _cw_append_text(self, text):
+        """Append text to the decoded buffer, keeping last 120 chars."""
+        self._cw_decoded_text += text
+        if len(self._cw_decoded_text) > 120:
+            self._cw_decoded_text = self._cw_decoded_text[-120:]
+
+    def get_cw_text(self):
+        """Return the decoded CW text buffer."""
+        return self._cw_decoded_text
 
     def get_cw_peak_hz(self):
         """Return the smoothed peak audio frequency in CW mode."""
@@ -446,6 +516,10 @@ class Demodulator:
         self._cw_sample_count = 0
         self._cw_element_ms = []
         self._cw_wpm = 0.0
+        self._cw_current_char = []
+        self._cw_decoded_text = ""
+        self._cw_last_keyup_sample = 0
+        self._cw_dit_ms = 0.0
         if self._cw_taps is not None:
             self._cw_zi_i = lfilter_zi(self._cw_taps, 1.0).astype(np.float32) * 0
             self._cw_zi_q = lfilter_zi(self._cw_taps, 1.0).astype(np.float32) * 0

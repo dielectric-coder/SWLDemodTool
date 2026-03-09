@@ -42,6 +42,9 @@ def _default_status():
         "text": "",
         "bitrate": 0.0,
         "mode": "?",
+        "country": "",
+        "language": "",
+        "audio_mode": "",
     }
 
 
@@ -310,18 +313,31 @@ class DRMDecoder:
         label = ""
         text = ""
         bitrate = 0.0
+        country = ""
+        language = ""
+        audio_mode = ""
         services = data.get("service_list", [])
         for svc in services:
             if svc.get("is_audio", False):
                 label = svc.get("label", "").strip()
                 text = svc.get("text", "").strip()
                 bitrate = svc.get("bitrate_kbps", 0.0)
+                audio_mode = svc.get("audio_mode", "")
+                lang = svc.get("language", {})
+                language = lang.get("name", "") if lang else ""
+                ctry = svc.get("country", {})
+                country = ctry.get("name", "") if ctry else ""
                 break
         if not label and services:
             svc = services[0]
             label = svc.get("label", "").strip()
             text = svc.get("text", "").strip()
             bitrate = svc.get("bitrate_kbps", 0.0)
+            audio_mode = svc.get("audio_mode", "")
+            lang = svc.get("language", {})
+            language = lang.get("name", "") if lang else ""
+            ctry = svc.get("country", {})
+            country = ctry.get("name", "") if ctry else ""
 
         with self._lock:
             self.status["sync"] = sync
@@ -331,6 +347,9 @@ class DRMDecoder:
             self.status["text"] = text
             self.status["bitrate"] = bitrate
             self.status["mode"] = mode
+            self.status["country"] = country
+            self.status["language"] = language
+            self.status["audio_mode"] = audio_mode
 
     def _drain_stderr(self):
         """Drain stderr to prevent pipe blocking."""

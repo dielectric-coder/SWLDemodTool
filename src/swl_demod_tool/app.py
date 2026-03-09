@@ -110,7 +110,7 @@ Screen {
 }
 
 #mode-info {
-    height: 2;
+    height: 3;
     background: black;
     color: #c0a36e;
     padding: 0 2;
@@ -179,6 +179,7 @@ class DemodApp(App):
         ("pageup", "rit_up", "RIT+"),
         ("pagedown", "rit_down", "RIT-"),
         ("v", "toggle_vfo", "VFO"),
+        ("t", "clear_cw_text", "ClrTxt"),
     ]
 
     utc_display = reactive("--:-- UTC")
@@ -453,7 +454,12 @@ class DemodApp(App):
         w = self.query_one("#mode-info", Static)
         mode = self.demod.mode
         if mode in ("CW+", "CW-"):
-            w.update(f"{self._cw_tuning_bar()}    {self._rit_str()}")
+            cw_text = self.demod.get_cw_text()
+            line1 = f"{self._cw_tuning_bar()}    {self._rit_str()}"
+            if cw_text:
+                w.update(f"{line1}\n   {cw_text}")
+            else:
+                w.update(line1)
         elif mode == "DRM":
             t = self._drm_status_text()
             if t is not None:
@@ -479,6 +485,12 @@ class DemodApp(App):
                 parts.append(f"    Station: {st['label']}")
             if st["bitrate"] > 0:
                 parts.append(f"    {st['bitrate']:.1f} kbps")
+            if st.get("audio_mode"):
+                parts.append(f"  {st['audio_mode']}")
+            if st.get("country"):
+                parts.append(f"    {st['country']}")
+            if st.get("language"):
+                parts.append(f"  ({st['language']})")
             if st.get("text"):
                 parts.append(f"\n   {st['text']}")
         else:
@@ -500,6 +512,13 @@ class DemodApp(App):
                 t.append(st["label"], style="bold yellow")
             if st["bitrate"] > 0:
                 t.append(f"    {st['bitrate']:.1f} kbps")
+            if st.get("audio_mode"):
+                t.append(f"  {st['audio_mode']}")
+            if st.get("country"):
+                t.append("    ")
+                t.append(st["country"], style="bright_white")
+            if st.get("language"):
+                t.append(f"  ({st['language']})")
             if st.get("text"):
                 t.append("\n   ")
                 t.append(st["text"], style="cyan")
@@ -667,6 +686,10 @@ class DemodApp(App):
         if new_mode in defaults:
             self.demod.set_bandwidth(defaults[new_mode])
         self._update_radio_info()
+
+    def action_clear_cw_text(self):
+        """Clear the decoded CW text buffer."""
+        self.demod._cw_decoded_text = ""
 
     def action_volume_up(self):
         self.demod.volume = min(1.0, self.demod.volume + 0.05)

@@ -65,6 +65,7 @@ The app auto-connects on startup to `localhost:4533` (IQ) and `localhost:4532` (
 | `/`             | Direct frequency entry (kHz, tunes active VFO) |
 | `Shift+→`       | Zoom into spectrum                  |
 | `Shift+←`       | Zoom out of spectrum                |
+| `t`             | Clear decoded CW text               |
 | `q`             | Quit                                |
 | `Escape`        | Unfocus text input                  |
 
@@ -88,9 +89,9 @@ The app auto-connects on startup to `localhost:4533` (IQ) and `localhost:4532` (
 
 A dedicated panel below the audio info displays mode-specific indicators:
 
-**CW modes (CW+/CW-):** Tuning indicator (center-zero bar, ±150 Hz range), tone SNR, estimated speed in WPM, and RIT offset. When no tone is detected, readings hold for ~1 second before blanking.
+**CW modes (CW+/CW-):** Tuning indicator (center-zero bar, ±150 Hz range), tone SNR, estimated speed in WPM, RIT offset, and live decoded Morse text. Press `t` to clear the text buffer. When no tone is detected, readings hold for ~1 second before blanking.
 
-**DRM mode:** Sync status, SNR, robustness mode, station label, bitrate, and text messages. The sync indicators show six status fields (IO, Time, Frame, FAC, SDC, MSC):
+**DRM mode:** Sync status, SNR, robustness mode, station label, bitrate, audio mode, country, language, and text messages. The sync indicators show six status fields (IO, Time, Frame, FAC, SDC, MSC):
 - Green `O` = OK
 - Red `X` = CRC error
 - Yellow `*` = data error
@@ -135,7 +136,7 @@ When a SAM mode is active, the mode info panel displays the PLL tracking offset 
 
 CW+ and CW- demodulate Morse code (CW) signals using a product detector with a 700 Hz BFO (beat frequency oscillator) tone offset. CW+ uses the upper sideband (+700 Hz), CW- uses the lower sideband (-700 Hz). The default bandwidth is 500 Hz; use `]`/`[` to adjust from 100 Hz (very narrow, contest use) to 1000 Hz (wide, signal finding) in 50 Hz steps.
 
-The mode info panel shows a tuning indicator, tone SNR, and estimated keying speed (WPM). Use `PgUp`/`PgDn` for 10 Hz RIT tuning to zero-beat the signal precisely.
+The mode info panel shows a tuning indicator, tone SNR, estimated keying speed (WPM), and live decoded Morse text. The decoder needs ~4 elements to establish timing, then produces characters as they are keyed. Unknown sequences display as `␣`. Press `t` to clear the decoded text. Use `PgUp`/`PgDn` for 10 Hz RIT tuning to zero-beat the signal precisely.
 
 ### RIT (Receiver Incremental Tuning)
 

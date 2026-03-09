@@ -25,6 +25,7 @@ class AudioOutput:
         self._buf_len = buf_len
         self._lock = threading.Lock()
         self._underrun_count = 0
+        self._overflow_count = 0
 
     def start(self, device=None):
         """Start the audio output stream."""
@@ -56,12 +57,21 @@ class AudioOutput:
             return
 
         with self._lock:
-            # Check available space
             available = self._buf_len - self._buffered()
             if n > available:
-                # Drop oldest to make room
-                drop = n - available
-                self._read_pos = (self._read_pos + drop) % self._buf_len
+                # Overflow: reset buffer to ~50% fill instead of constant
+                # tiny drops that create sustained distortion.
+                target = self._buf_len // 2
+                self._read_pos = 0
+                self._write_pos = 0
+                # Write only the tail of incoming samples to fill to target
+                if n > target:
+                    samples = samples[-target:]
+                    n = target
+                self._buffer[:n] = samples
+                self._write_pos = n % self._buf_len
+                self._overflow_count += 1
+                return
 
             # Write into ring buffer
             wp = self._write_pos

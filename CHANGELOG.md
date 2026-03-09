@@ -5,6 +5,9 @@
 ### Added
 - `--debug` CLI flag enables debug logging to `swl-demod.log`
 - DRM text message display (station text/programme info) in mode info panel
+- CW Morse code decoder with live text output in mode info panel
+- `t` key to clear decoded CW text
+- DRM status: country, language, and audio mode (Mono/Stereo/P-Stereo) display
 
 ### Changed
 - Upgraded Dream integration from 2.1.1 (patched stderr) to Dream 2.2 (JSON status via Unix domain socket)
@@ -17,6 +20,7 @@
 
 ### Fixed
 - DRM audio distortion over time caused by unaligned stereo frame reads from Dream's stdout (partial reads losing remainder bytes, compounding into permanent frame misalignment)
+- Ring buffer overflow handling: clean reset to 50% fill instead of constant micro-drops that caused sustained distortion
 
 ## [0.3.0] - 2026-03-08
 
