@@ -13,8 +13,6 @@ DEFAULTS = {
     },
     "audio": {
         "device": "default",
-        "sample_rate": "48000",
-        "buffer_size": "1024",
     },
     "drm": {
         "dream_path": "",
@@ -31,6 +29,7 @@ def load_config():
 
 
 def save_config(config):
-    os.makedirs(CONFIG_DIR, exist_ok=True)
-    with open(CONFIG_FILE, "w") as f:
+    os.makedirs(CONFIG_DIR, mode=0o700, exist_ok=True)
+    fd = os.open(CONFIG_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
         config.write(f)

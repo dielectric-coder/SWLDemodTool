@@ -47,6 +47,13 @@ IQ TCP stream -> IQClient._receive_loop() -> DemodApp._on_iq_data()
 
 UI updates from background threads are marshalled via `call_from_thread()`.
 
+### Thread Safety
+
+- **Audio ring buffer** is lock-free (single-writer from IQ/DRM thread, single-reader from sounddevice callback). One slot is reserved to distinguish full from empty.
+- **`Demodulator._lock`** protects state shared between UI and IQ threads: `agc_enabled`, `volume`, `muted`, CW text/timing/WPM. Access these via the thread-safe properties and `get_*`/`clear_*` methods.
+- **`DRMDecoder._lock`** protects `self._process` (preventing race between `write_iq` and `stop`) and `self.status` dict.
+- **`_cat_polling` flag** in `DemodApp` prevents concurrent `_poll_cat` worker threads from accumulating when the CAT server is slow.
+
 ### IQ Protocol
 
 The Elad Spectrum IQ server sends:
@@ -132,7 +139,7 @@ IQ (192 kHz) -> FIR lowpass (127-tap, scipy firwin)
 DRM decoding uses the Dream 2.2 open-source decoder as a subprocess, following the [openwebrx](https://github.com/jketterl/openwebrx) approach:
 
 ```
-Dream command: dream -c 6 --sigsrate {iq_rate} --audsrate 48000 -I - -O - --status-socket /tmp/dream_status_PID.sock
+Dream command: dream -c 6 --sigsrate {iq_rate} --audsrate 48000 -I - -O - --status-socket /tmp/swl_drm_XXXXX/status.sock
 ```
 
 - `-I -` reads raw int16 stereo IQ from stdin

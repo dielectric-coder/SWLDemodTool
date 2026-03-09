@@ -4,6 +4,9 @@ import bisect
 import socket
 import threading
 
+# Maximum bytes to buffer when waiting for a ';' terminator
+_MAX_RESPONSE_LEN = 4096
+
 
 class CATClient:
     def __init__(self, host="localhost", port=4532):
@@ -53,7 +56,12 @@ class CATClient:
                     data.extend(chunk)
                     if b";" in data:
                         break
-                return data.decode("ascii", errors="replace").strip()
+                    if len(data) > _MAX_RESPONSE_LEN:
+                        self.connected = False
+                        return None
+                # Return only up to the first ';' terminator
+                end = data.index(b";") + 1
+                return data[:end].decode("ascii", errors="replace").strip()
             except (OSError, TimeoutError):
                 self.connected = False
                 return None
@@ -96,10 +104,7 @@ class CATClient:
         """Query mode from IF response. Returns mode string or None."""
         resp = self.send_command("IF;")
         if resp and resp.startswith("IF") and len(resp) >= 30:
-            try:
-                return self._MODE_MAP.get(resp[29], f"?{resp[29]}")
-            except IndexError:
-                pass
+            return self._MODE_MAP.get(resp[29], f"?{resp[29]}")
         return None
 
     def get_active_vfo(self):
@@ -113,20 +118,31 @@ class CATClient:
         return None
 
     def set_active_vfo(self, vfo):
-        """Set active receive VFO. vfo should be 'A' or 'B'."""
+        """Set active receive VFO. vfo must be 'A' or 'B'."""
+        if vfo not in ("A", "B"):
+            return False
         digit = "0" if vfo == "A" else "1"
         resp = self.send_command(f"FR{digit};")
         return resp is not None
 
+    # Maximum frequency the radio will accept (2 GHz, generous upper bound)
+    _MAX_FREQ_HZ = 2_000_000_000
+
     def set_frequency(self, freq_hz):
         """Set VFO-A frequency via FA command. freq_hz is an integer in Hz."""
-        freq_str = f"FA{int(freq_hz):011d};"
+        freq_hz = int(freq_hz)
+        if freq_hz <= 0 or freq_hz > self._MAX_FREQ_HZ:
+            return False
+        freq_str = f"FA{freq_hz:011d};"
         resp = self.send_command(freq_str)
         return resp is not None
 
     def set_frequency_b(self, freq_hz):
         """Set VFO-B frequency via FB command. freq_hz is an integer in Hz."""
-        freq_str = f"FB{int(freq_hz):011d};"
+        freq_hz = int(freq_hz)
+        if freq_hz <= 0 or freq_hz > self._MAX_FREQ_HZ:
+            return False
+        freq_str = f"FB{freq_hz:011d};"
         resp = self.send_command(freq_str)
         return resp is not None
 

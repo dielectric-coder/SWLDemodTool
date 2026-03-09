@@ -19,7 +19,7 @@ import tempfile
 import threading
 import time
 import numpy as np
-from scipy.signal import firwin, lfilter, lfilter_zi
+from scipy.signal import firwin, lfilter
 
 log = logging.getLogger(__name__)
 
@@ -30,6 +30,9 @@ _DEFAULT_DREAM_PATH = os.path.normpath(
 
 _ROBUSTNESS_MODES = {0: "A", 1: "B", 2: "C", 3: "D"}
 _SYNC_KEYS = ("io", "time", "frame", "fac", "sdc", "msc")
+
+# Maximum bytes to buffer when waiting for a newline in status socket
+_MAX_STATUS_BUF = 65536
 
 
 def _default_status():
@@ -48,6 +51,13 @@ def _default_status():
     }
 
 
+def _make_decim_filter(num_taps, cutoff, fs):
+    """Build a decimation FIR and zero initial conditions."""
+    taps = firwin(num_taps, cutoff, fs=fs).astype(np.float32)
+    zi = np.zeros(len(taps) - 1, dtype=np.float32)
+    return taps, zi
+
+
 def find_dream_binary(configured_path=None):
     """Locate the Dream binary. Returns path or None."""
     candidates = []
@@ -63,15 +73,22 @@ def find_dream_binary(configured_path=None):
     return None
 
 
+def _extract_service_info(svc):
+    """Extract label, text, bitrate, audio_mode, language, country from a service dict."""
+    label = svc.get("label", "").strip()
+    text = svc.get("text", "").strip()
+    bitrate = svc.get("bitrate_kbps", 0.0)
+    audio_mode = svc.get("audio_mode", "")
+    lang = svc.get("language", {})
+    language = lang.get("name", "") if lang else ""
+    ctry = svc.get("country", {})
+    country = ctry.get("name", "") if ctry else ""
+    return label, text, bitrate, audio_mode, language, country
+
+
 class DRMDecoder:
-    """Manages a Dream 2.2 DRM decoder subprocess using stdin/stdout pipes.
+    """Manages a Dream 2.2 DRM decoder subprocess using stdin/stdout pipes."""
 
-    Dream reads raw int16 stereo IQ from stdin (-I -) and writes
-    decoded int16 audio to stdout (-O -).  JSON status is broadcast
-    via a Unix domain socket (--status-socket).
-    """
-
-    # Dream always receives IQ at this rate (matching openwebrx)
     DREAM_IQ_RATE = 48000
 
     def __init__(self, iq_sample_rate=48000, audio_rate=48000,
@@ -86,9 +103,10 @@ class DRMDecoder:
         self._audio_callback = None
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
+        self._socket_dir = None
         self._socket_path = None
 
-        # Decimation filter state (rebuilt on start)
+        # Decimation filter state
         self._decim = 1
         self._decim_fir = None
         self._decim_zi_i = None
@@ -98,7 +116,8 @@ class DRMDecoder:
 
     @property
     def running(self):
-        return self._process is not None and self._process.poll() is None
+        with self._lock:
+            return self._process is not None and self._process.poll() is None
 
     def start(self, audio_callback=None):
         """Start the Dream subprocess."""
@@ -113,32 +132,24 @@ class DRMDecoder:
         # Build decimation filter: IQ sample rate -> 48 kHz
         self._decim = max(1, self.iq_sample_rate // self.DREAM_IQ_RATE)
         if self._decim > 1:
-            cutoff = self.DREAM_IQ_RATE / 2.0
-            nyq = self.iq_sample_rate / 2.0
-            self._decim_fir = firwin(
-                127, cutoff / nyq, window="blackman").astype(np.float32)
-            self._decim_zi_i = lfilter_zi(self._decim_fir, 1.0).astype(
-                np.float32)
-            self._decim_zi_q = lfilter_zi(self._decim_fir, 1.0).astype(
-                np.float32)
+            self._decim_fir, self._decim_zi_i = _make_decim_filter(
+                127, self.DREAM_IQ_RATE / 2.0, self.iq_sample_rate)
+            _, self._decim_zi_q = _make_decim_filter(
+                127, self.DREAM_IQ_RATE / 2.0, self.iq_sample_rate)
         else:
             self._decim_fir = None
 
-        self._socket_path = os.path.join(
-            tempfile.gettempdir(),
-            f"dream_status_{os.getpid()}.sock")
-        try:
-            os.unlink(self._socket_path)
-        except FileNotFoundError:
-            pass
+        # Use a private temp directory for the socket (prevents symlink attacks)
+        self._socket_dir = tempfile.mkdtemp(prefix="swl_drm_")
+        self._socket_path = os.path.join(self._socket_dir, "status.sock")
 
         cmd = [
             self.dream_path,
-            "-c", "6",  # IQ positive, zero IF
+            "-c", "6",
             "--sigsrate", str(self.DREAM_IQ_RATE),
             "--audsrate", str(self.audio_rate),
-            "-I", "-",   # Read IQ from stdin
-            "-O", "-",   # Write decoded audio to stdout
+            "-I", "-",
+            "-O", "-",
             "--status-socket", self._socket_path,
         ]
         log.info("Starting Dream: %s", " ".join(cmd))
@@ -158,7 +169,6 @@ class DRMDecoder:
             target=self._read_status_socket, daemon=True)
         self._socket_thread.start()
 
-        # Drain stderr to prevent pipe blocking
         self._stderr_thread = threading.Thread(
             target=self._drain_stderr, daemon=True)
         self._stderr_thread.start()
@@ -167,7 +177,9 @@ class DRMDecoder:
 
     def write_iq(self, iq_samples):
         """Write IQ samples to Dream's stdin, decimating to 48 kHz first."""
-        if not self.running or self._process.stdin is None:
+        with self._lock:
+            proc = self._process
+        if proc is None or proc.poll() is not None or proc.stdin is None:
             return
 
         # Decimate from iq_sample_rate to 48 kHz
@@ -192,15 +204,15 @@ class DRMDecoder:
             q_dec * scale, -32768, 32767).astype(np.int16)
 
         try:
-            self._process.stdin.write(interleaved.tobytes())
-            self._process.stdin.flush()
+            proc.stdin.write(interleaved.tobytes())
+            proc.stdin.flush()
         except (OSError, BrokenPipeError) as e:
             log.debug("write_iq error: %s", e)
 
     def _read_audio(self):
         """Read decoded audio from Dream's stdout and deliver via callback."""
         chunk_bytes = 4096
-        frame_bytes = 4  # 2 channels × 2 bytes per int16 sample
+        frame_bytes = 4  # 2 channels x 2 bytes per int16 sample
         remainder = b""
         try:
             while not self._stop_event.is_set():
@@ -208,7 +220,6 @@ class DRMDecoder:
                 if not data:
                     break
                 data = remainder + data
-                # Align to stereo frame boundary (4 bytes)
                 usable = len(data) - (len(data) % frame_bytes)
                 if usable < frame_bytes:
                     remainder = data
@@ -219,12 +230,11 @@ class DRMDecoder:
                 mono = stereo.mean(axis=1).astype(np.float32) / 32768.0
                 if self._audio_callback:
                     self._audio_callback(mono)
-        except (OSError, ValueError):
-            pass
+        except (OSError, ValueError) as e:
+            log.debug("_read_audio error: %s", e)
 
     def _read_status_socket(self):
         """Read JSON status from Dream's Unix domain socket."""
-        # Wait for socket file to appear
         for _ in range(50):
             if self._stop_event.is_set():
                 return
@@ -236,7 +246,6 @@ class DRMDecoder:
                         self._socket_path)
             return
 
-        # Retry connection until Dream is listening
         sock = None
         for _ in range(10):
             if self._stop_event.is_set():
@@ -270,6 +279,9 @@ class DRMDecoder:
                 if not data:
                     break
                 buf += data
+                # Cap buffer to prevent unbounded growth
+                if len(buf) > _MAX_STATUS_BUF:
+                    buf = buf[-_MAX_STATUS_BUF:]
                 while b"\n" in buf:
                     line, buf = buf.split(b"\n", 1)
                     self._parse_json_status(line)
@@ -288,8 +300,6 @@ class DRMDecoder:
         except (json.JSONDecodeError, ValueError):
             return
 
-        # Build sync string from status dict
-        # Dream status: 0=RX_OK, 1=CRC_ERROR, 2=DATA_ERROR, -1=NOT_PRESENT
         st = data.get("status", {})
         sync_chars = []
         for key in _SYNC_KEYS:
@@ -309,35 +319,19 @@ class DRMDecoder:
         mode_info = data.get("mode", {})
         mode = _ROBUSTNESS_MODES.get(mode_info.get("robustness", -1), "?")
 
-        # Extract service info
-        label = ""
-        text = ""
+        # Extract service info — prefer first audio service, fall back to first service
+        label = text = audio_mode = country = language = ""
         bitrate = 0.0
-        country = ""
-        language = ""
-        audio_mode = ""
         services = data.get("service_list", [])
+        chosen = None
         for svc in services:
             if svc.get("is_audio", False):
-                label = svc.get("label", "").strip()
-                text = svc.get("text", "").strip()
-                bitrate = svc.get("bitrate_kbps", 0.0)
-                audio_mode = svc.get("audio_mode", "")
-                lang = svc.get("language", {})
-                language = lang.get("name", "") if lang else ""
-                ctry = svc.get("country", {})
-                country = ctry.get("name", "") if ctry else ""
+                chosen = svc
                 break
-        if not label and services:
-            svc = services[0]
-            label = svc.get("label", "").strip()
-            text = svc.get("text", "").strip()
-            bitrate = svc.get("bitrate_kbps", 0.0)
-            audio_mode = svc.get("audio_mode", "")
-            lang = svc.get("language", {})
-            language = lang.get("name", "") if lang else ""
-            ctry = svc.get("country", {})
-            country = ctry.get("name", "") if ctry else ""
+        if chosen is None and services:
+            chosen = services[0]
+        if chosen is not None:
+            label, text, bitrate, audio_mode, language, country = _extract_service_info(chosen)
 
         with self._lock:
             self.status["sync"] = sync
@@ -368,21 +362,23 @@ class DRMDecoder:
     def stop(self):
         """Stop the Dream subprocess and clean up."""
         self._stop_event.set()
-        if self._process is not None:
-            if self._process.stdin:
+        with self._lock:
+            proc = self._process
+            self._process = None
+        if proc is not None:
+            if proc.stdin:
                 try:
-                    self._process.stdin.close()
+                    proc.stdin.close()
                 except OSError:
                     pass
             try:
-                self._process.terminate()
-                self._process.wait(timeout=3)
+                proc.terminate()
+                proc.wait(timeout=3)
             except (subprocess.TimeoutExpired, OSError):
                 try:
-                    self._process.kill()
+                    proc.kill()
                 except OSError:
                     pass
-            self._process = None
         self._audio_callback = None
         if self._socket_path:
             try:
@@ -390,5 +386,11 @@ class DRMDecoder:
             except FileNotFoundError:
                 pass
             self._socket_path = None
+        if self._socket_dir:
+            try:
+                os.rmdir(self._socket_dir)
+            except OSError:
+                pass
+            self._socket_dir = None
         with self._lock:
             self.status = _default_status()

@@ -225,6 +225,9 @@ class DemodApp(App):
         # DRM status change tracking
         self._last_drm_plain = ""
 
+        # Guard against concurrent CAT polls
+        self._cat_polling = False
+
     def compose(self):
         yield Static(id="title-bar")
         with Horizontal(id="freq-bar"):
@@ -329,7 +332,7 @@ class DemodApp(App):
 
         try:
             width = self.size.width - 6
-        except Exception:
+        except AttributeError:
             width = 60
         width = max(20, min(width, 200))
 
@@ -386,7 +389,7 @@ class DemodApp(App):
             self.demod.clear_cw_timing()
             return f"   Tune: [{''.join(bar)}] - ---.- Hz    SNR: -- dB    -- WPM"
         peak = self.demod.get_cw_peak_hz()
-        target = self.demod._bfo_offset  # 700 Hz
+        target = self.demod.bfo_offset
         deviation = peak - target  # Hz off from ideal
         # Map deviation to bar position: ±150 Hz range, center = on-tune
         max_dev = 150.0
@@ -410,7 +413,7 @@ class DemodApp(App):
         vol_bar = "█" * (vol_pct // 5) + "░" * (20 - vol_pct // 5)
 
         # AGC info
-        agc_str = "ON " if self.demod._agc_enabled else "OFF"
+        agc_str = "ON " if self.demod.agc_enabled else "OFF"
         agc_gain_db = self.demod.get_agc_gain_db()
 
         # Audio level meter
@@ -475,32 +478,13 @@ class DemodApp(App):
     _SYNC_STYLES = {"O": "green", "X": "red", "*": "yellow", "-": "#888888"}
 
     def _drm_status_text(self):
-        """Build DRM status as a Text object (avoids markup parsing)."""
+        """Build DRM status as a Rich Text object (avoids markup parsing).
+
+        Returns None if nothing changed since the last call.
+        """
         st = self.drm.get_status()
-        parts = [f"   Sync: {st['sync']}"]
-        if st["signal"]:
-            parts.append(f"  SNR: {st['snr']:.1f} dB    Mode: {st['mode']}")
-            if st["label"]:
-                parts.append(f"    Station: {st['label']}")
-            if st["bitrate"] > 0:
-                parts.append(f"    {st['bitrate']:.1f} kbps")
-            if st.get("audio_mode"):
-                parts.append(f"  {st['audio_mode']}")
-            if st.get("country"):
-                parts.append(f"    {st['country']}")
-            if st.get("language"):
-                parts.append(f"  ({st['language']})")
-            if st.get("text"):
-                parts.append(f"\n   {st['text']}")
-        else:
-            parts.append("  Acquiring...")
-        plain = "".join(parts)
 
-        # Skip widget update if nothing changed
-        if plain == self._last_drm_plain:
-            return None
-        self._last_drm_plain = plain
-
+        # Build styled Text, then derive plain string for change detection
         t = Text("   Sync: ")
         for c in st["sync"]:
             t.append(c, style=self._SYNC_STYLES.get(c, "#888888"))
@@ -523,6 +507,11 @@ class DemodApp(App):
                 t.append(st["text"], style="cyan")
         else:
             t.append("  Acquiring...")
+
+        plain = t.plain
+        if plain == self._last_drm_plain:
+            return None
+        self._last_drm_plain = plain
         return t
 
     def _update_status(self):
@@ -564,32 +553,37 @@ class DemodApp(App):
     def _apply_iq_update(self, peak):
         self.peak_db = peak
 
+    # --- CAT helpers ---
+
+    def _get_active_freq(self, vfo=None):
+        """Query frequency for the given or current VFO."""
+        vfo = vfo or self.active_vfo
+        if vfo == "B":
+            return self.cat_client.get_vfo_b_freq()
+        return self.cat_client.get_vfo_a_freq()
+
     # --- CAT polling ---
 
     @work(thread=True)
     def _poll_cat(self):
-        if not self.cat_client.connected:
+        if self._cat_polling or not self.cat_client.connected:
             return
-        # Poll active VFO first so we query the right frequency
-        vfo = self.cat_client.get_active_vfo()
-        if vfo is not None:
-            self.call_from_thread(setattr, self, "active_vfo", vfo)
-        # Query frequency for the active VFO
-        active = vfo or self.active_vfo
-        if active == "B":
-            freq = self.cat_client.get_vfo_b_freq()
-        else:
-            freq = self.cat_client.get_vfo_a_freq()
-        if freq is not None:
-            self.call_from_thread(self._apply_cat_update, freq)
-        # Poll S-meter
-        sm = self.cat_client.get_s_meter()
-        if sm is not None:
-            with self._s_lock:
-                self._s_unit, self._s_raw = sm
-        # Update connection indicator if CAT dropped
-        if not self.cat_client.connected:
-            self.call_from_thread(self._update_conn_status)
+        self._cat_polling = True
+        try:
+            vfo = self.cat_client.get_active_vfo()
+            if vfo is not None:
+                self.call_from_thread(setattr, self, "active_vfo", vfo)
+            freq = self._get_active_freq(vfo)
+            if freq is not None:
+                self.call_from_thread(self._apply_cat_update, freq)
+            sm = self.cat_client.get_s_meter()
+            if sm is not None:
+                with self._s_lock:
+                    self._s_unit, self._s_raw = sm
+            if not self.cat_client.connected:
+                self.call_from_thread(self._update_conn_status)
+        finally:
+            self._cat_polling = False
 
     def _apply_cat_update(self, freq):
         self.frequency_hz = freq
@@ -630,10 +624,7 @@ class DemodApp(App):
                 vfo = self.cat_client.get_active_vfo()
                 if vfo:
                     self.call_from_thread(setattr, self, "active_vfo", vfo)
-                if vfo == "B":
-                    freq = self.cat_client.get_vfo_b_freq()
-                else:
-                    freq = self.cat_client.get_vfo_a_freq()
+                freq = self._get_active_freq(vfo)
                 if freq:
                     self.call_from_thread(setattr, self, "frequency_hz", freq)
                 self.call_from_thread(self._update_radio_info)
@@ -657,7 +648,7 @@ class DemodApp(App):
         self._update_audio_info()
 
     def action_toggle_agc(self):
-        self.demod._agc_enabled = not self.demod._agc_enabled
+        self.demod.agc_enabled = not self.demod.agc_enabled
         self._update_audio_info()
 
     def action_cycle_mode(self):
@@ -776,11 +767,7 @@ class DemodApp(App):
         """Send VFO switch command to radio in a worker thread."""
         if self.cat_client.set_active_vfo(vfo):
             self.call_from_thread(setattr, self, "active_vfo", vfo)
-            # Refresh frequency for the new VFO
-            if vfo == "B":
-                freq = self.cat_client.get_vfo_b_freq()
-            else:
-                freq = self.cat_client.get_vfo_a_freq()
+            freq = self._get_active_freq(vfo)
             if freq is not None:
                 self.call_from_thread(self._apply_cat_update, freq)
             else:
@@ -821,7 +808,7 @@ class DemodApp(App):
             freq_hz = int(freq_khz * 1000)
         except ValueError:
             return
-        if freq_hz > 0 and self.cat_client.connected:
+        if 0 < freq_hz <= 2_000_000_000 and self.cat_client.connected:
             self._do_tune(freq_hz)
         event.input.value = ""
         self.set_focus(None)
@@ -854,8 +841,13 @@ def main():
     args = parser.parse_args()
 
     if args.debug:
+        log_dir = os.path.join(
+            os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state")),
+            "swl-demod-tool")
+        os.makedirs(log_dir, mode=0o700, exist_ok=True)
         logging.basicConfig(
-            filename="swl-demod.log", level=logging.DEBUG,
+            filename=os.path.join(log_dir, "swl-demod.log"),
+            level=logging.DEBUG,
             format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
     config = load_config()

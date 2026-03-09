@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.4.1] - 2026-03-09
+
+### Security
+- DRM status socket now uses a private temp directory (`tempfile.mkdtemp`) instead of a predictable path in `/tmp`, preventing symlink attacks
+- Debug log writes to `$XDG_STATE_HOME/swl-demod-tool/` instead of CWD, preventing symlink attacks on shared systems
+- Config file created with `0o600` permissions, config directory with `0o700`
+- CAT `set_frequency`/`set_frequency_b` reject values ≤0 or >2 GHz
+- CAT `set_active_vfo` validates input is "A" or "B"
+- Frequency input field enforces upper bound (2 GHz)
+
+### Fixed
+- **Audio ring buffer rewritten as lock-free**: removed `threading.Lock` from real-time audio callback (was causing audio glitches under contention). Single-writer/single-reader design with one-slot reservation to distinguish full from empty.
+- **Ring buffer full/empty ambiguity**: reserved one slot so `write_pos == read_pos` unambiguously means empty (was a latent bug where a completely full buffer appeared empty)
+- Ring buffer overflow now advances read pointer (drops oldest samples) instead of resetting the entire buffer, reducing audible discontinuities
+- **Thread safety in `Demodulator`**: added `threading.Lock` protecting `agc_enabled`, `volume`, `muted`, CW text/timing state shared between UI and IQ threads. `clear_cw_text`, `clear_cw_timing`, `get_cw_text`, `get_cw_wpm` are now properly synchronized.
+- **DRM process race condition**: `running` property and `write_iq` now hold lock when accessing `self._process`, preventing race with `stop()`
+- CAT poll guard prevents concurrent `_poll_cat` worker threads from accumulating when the server is slow
+- CAT response buffer capped at 4 KB; response truncated at first `;` to prevent misalignment
+- DRM status socket buffer capped at 64 KB to prevent unbounded growth
+- Removed dead `except IndexError` in `_get_mode_from_if` (unreachable due to prior length check)
+
+### Changed
+- `Demodulator.agc_enabled` exposed as a thread-safe property (replaces direct `_agc_enabled` access)
+- `Demodulator.bfo_offset` exposed as a read-only property (replaces direct `_bfo_offset` access)
+- PLL uses `math.cos`/`math.sin`/`math.atan2` instead of `np.*` for scalar values (reduces per-call overhead)
+- Replaced all `lfilter_zi(...) * 0` with `np.zeros()` via `_make_filter()` helper (avoids unnecessary matrix solve)
+- Blackman window cached across calls (no reallocation per FFT)
+- CW buffer uses ring buffer index instead of `np.roll` (avoids full-array copy each chunk)
+- CW detection extracted into `_detect_cw()` and `_cw_analyze_tone()` methods (was 55 lines inline in `process()`)
+- All DSP magic numbers extracted to named module-level constants (`_DC_ALPHA`, `_AGC_*`, `_PLL_*`, `_CW_*`)
+- Decimation ratio validated with assertion (`iq_sample_rate % audio_rate == 0`)
+- DRM service info extraction deduplicated into `_extract_service_info()` helper
+- DRM status `Text` object built once; plain string derived via `t.plain` (was built twice in parallel)
+- VFO frequency query deduplicated into `_get_active_freq()` helper (was 3 identical if/else blocks)
+- `spectrum_to_sparkline` guards against empty bins from floating-point edge effects
+- Narrowed `except Exception` to `except AttributeError` for `self.size.width` access
+- Removed unused `sample_rate` and `buffer_size` config defaults (were never read; hardcoded in app)
+
 ## [0.4.0] - 2026-03-09
 
 ### Added

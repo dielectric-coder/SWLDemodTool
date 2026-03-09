@@ -35,7 +35,7 @@ Real-time data pipeline: **IQ network stream -> DSP -> audio output**, with a Te
 
 ### Threading Model
 
-Multiple threads cooperate: main Textual event loop, IQ receive daemon thread (`IQClient`), sounddevice audio callback thread, and in DRM mode three additional threads (Dream audio reader, status socket reader, stderr drain). IQ data flows from network thread into `_on_iq_data()` which does DSP and pushes audio to the ring buffer (or pipes IQ to Dream in DRM mode). UI updates marshalled via `call_from_thread()`.
+Multiple threads cooperate: main Textual event loop, IQ receive daemon thread (`IQClient`), sounddevice audio callback thread, and in DRM mode three additional threads (Dream audio reader, status socket reader, stderr drain). IQ data flows from network thread into `_on_iq_data()` which does DSP and pushes audio to the ring buffer (or pipes IQ to Dream in DRM mode). UI updates marshalled via `call_from_thread()`. The audio ring buffer is lock-free (single-writer/single-reader). `Demodulator._lock` protects shared UI/IQ thread state. `DRMDecoder._lock` protects process handle and status dict.
 
 ### Key Constants
 
