@@ -44,7 +44,7 @@ Multiple threads cooperate: main Textual event loop, IQ receive daemon thread (`
 - Demod: 127-tap FIR (pre-decimation), decimation factor 4, AGC target 0.3 RMS
 - CW: 255-tap post-decimation audio-rate filter, 700 Hz BFO, 8192-sample FFT for tone analysis
 - Spectrum zoom: 1x to 1/64x via Shift+arrow keys
-- DRM: Dream 2.2 subprocess with `-c 6` (IQ positive zero-IF), JSON status via Unix socket
+- DRM: Dream 2.2 subprocess with `-c 6` (IQ positive zero-IF), IQ decimated to 48 kHz, JSON status via Unix socket
 
 ### DRM Integration
 

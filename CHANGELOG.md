@@ -15,6 +15,9 @@
 - Removed `audio_ok`/`audio_total` fields from DRM status (not available in Dream 2.2 JSON)
 - Clean thread shutdown via `threading.Event` instead of polling `process.poll()`
 
+### Fixed
+- DRM audio distortion over time caused by unaligned stereo frame reads from Dream's stdout (partial reads losing remainder bytes, compounding into permanent frame misalignment)
+
 ## [0.3.0] - 2026-03-08
 
 ### Added

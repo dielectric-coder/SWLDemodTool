@@ -140,7 +140,8 @@ Dream command: dream -c 6 --sigsrate {iq_rate} --audsrate 48000 -I - -O - --stat
 
 The `DRMDecoder` class manages the subprocess lifecycle:
 - `start(audio_callback)` — spawns Dream, starts audio reader / status socket / stderr drain threads
-- `write_iq(complex64)` — converts to int16 stereo, writes to stdin
+- `write_iq(complex64)` — decimates to 48 kHz, converts to int16 stereo, writes to stdin
+- `_read_audio()` — reads decoded int16 stereo from stdout with frame-aligned buffering (4-byte stereo frames; remainder bytes carried across reads to prevent misalignment)
 - `get_status()` — returns latest parsed status dict
 - `stop()` — terminates Dream, cleans up socket file and threads
 

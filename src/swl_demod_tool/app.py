@@ -204,7 +204,7 @@ class DemodApp(App):
         # Demodulation and audio
         self.demod = Demodulator(iq_sample_rate=192000, audio_rate=48000, bandwidth=5000)
         self.audio = AudioOutput(sample_rate=48000, block_size=1024)
-        self.drm = DRMDecoder(iq_sample_rate=192000)
+        self.drm = DRMDecoder(iq_sample_rate=192000, audio_rate=48000)
 
         # Audio level tracking
         self._audio_level_db = -120.0

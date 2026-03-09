@@ -1,11 +1,12 @@
 """DRM decoder integration — wraps the Dream 2.2 decoder as a subprocess.
 
 Uses Dream's stdin/stdout pipe mode (-I - / -O -) following the same
-approach as openwebrx.  IQ data is written to Dream's stdin as raw
-int16 interleaved stereo (I=left, Q=right).  Decoded audio is read
-from Dream's stdout as raw int16 mono and fed into the app's audio
-ring buffer.  Status information is read from a Unix domain socket
-via Dream's --status-socket option (JSON format).
+approach as openwebrx.  IQ data is decimated to 48 kHz and written to
+Dream's stdin as raw int16 interleaved stereo (I=left, Q=right).
+Decoded audio is read from Dream's stdout as raw int16 stereo and
+mixed to mono for the app's audio ring buffer.  Status information is
+read from a Unix domain socket via Dream's --status-socket option
+(JSON format).
 """
 
 import json
@@ -18,6 +19,7 @@ import tempfile
 import threading
 import time
 import numpy as np
+from scipy.signal import firwin, lfilter, lfilter_zi
 
 log = logging.getLogger(__name__)
 
@@ -66,6 +68,9 @@ class DRMDecoder:
     via a Unix domain socket (--status-socket).
     """
 
+    # Dream always receives IQ at this rate (matching openwebrx)
+    DREAM_IQ_RATE = 48000
+
     def __init__(self, iq_sample_rate=48000, audio_rate=48000,
                  dream_path=None):
         self.iq_sample_rate = iq_sample_rate
@@ -79,6 +84,12 @@ class DRMDecoder:
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
         self._socket_path = None
+
+        # Decimation filter state (rebuilt on start)
+        self._decim = 1
+        self._decim_fir = None
+        self._decim_zi_i = None
+        self._decim_zi_q = None
 
         self.status = _default_status()
 
@@ -96,6 +107,20 @@ class DRMDecoder:
         self._audio_callback = audio_callback
         self._stop_event.clear()
 
+        # Build decimation filter: IQ sample rate -> 48 kHz
+        self._decim = max(1, self.iq_sample_rate // self.DREAM_IQ_RATE)
+        if self._decim > 1:
+            cutoff = self.DREAM_IQ_RATE / 2.0
+            nyq = self.iq_sample_rate / 2.0
+            self._decim_fir = firwin(
+                127, cutoff / nyq, window="blackman").astype(np.float32)
+            self._decim_zi_i = lfilter_zi(self._decim_fir, 1.0).astype(
+                np.float32)
+            self._decim_zi_q = lfilter_zi(self._decim_fir, 1.0).astype(
+                np.float32)
+        else:
+            self._decim_fir = None
+
         self._socket_path = os.path.join(
             tempfile.gettempdir(),
             f"dream_status_{os.getpid()}.sock")
@@ -107,7 +132,7 @@ class DRMDecoder:
         cmd = [
             self.dream_path,
             "-c", "6",  # IQ positive, zero IF
-            "--sigsrate", str(self.iq_sample_rate),
+            "--sigsrate", str(self.DREAM_IQ_RATE),
             "--audsrate", str(self.audio_rate),
             "-I", "-",   # Read IQ from stdin
             "-O", "-",   # Write decoded audio to stdout
@@ -138,16 +163,30 @@ class DRMDecoder:
         return True
 
     def write_iq(self, iq_samples):
-        """Write IQ samples to Dream's stdin."""
+        """Write IQ samples to Dream's stdin, decimating to 48 kHz first."""
         if not self.running or self._process.stdin is None:
             return
 
+        # Decimate from iq_sample_rate to 48 kHz
+        if self._decim > 1 and self._decim_fir is not None:
+            i_in = np.real(iq_samples).astype(np.float32)
+            q_in = np.imag(iq_samples).astype(np.float32)
+            i_filt, self._decim_zi_i = lfilter(
+                self._decim_fir, 1.0, i_in, zi=self._decim_zi_i)
+            q_filt, self._decim_zi_q = lfilter(
+                self._decim_fir, 1.0, q_in, zi=self._decim_zi_q)
+            i_dec = i_filt[::self._decim]
+            q_dec = q_filt[::self._decim]
+        else:
+            i_dec = np.real(iq_samples)
+            q_dec = np.imag(iq_samples)
+
         scale = 32767.0
-        interleaved = np.empty(len(iq_samples) * 2, dtype=np.int16)
+        interleaved = np.empty(len(i_dec) * 2, dtype=np.int16)
         interleaved[0::2] = np.clip(
-            np.real(iq_samples) * scale, -32768, 32767).astype(np.int16)
+            i_dec * scale, -32768, 32767).astype(np.int16)
         interleaved[1::2] = np.clip(
-            np.imag(iq_samples) * scale, -32768, 32767).astype(np.int16)
+            q_dec * scale, -32768, 32767).astype(np.int16)
 
         try:
             self._process.stdin.write(interleaved.tobytes())
@@ -158,14 +197,21 @@ class DRMDecoder:
     def _read_audio(self):
         """Read decoded audio from Dream's stdout and deliver via callback."""
         chunk_bytes = 4096
+        frame_bytes = 4  # 2 channels × 2 bytes per int16 sample
+        remainder = b""
         try:
             while not self._stop_event.is_set():
                 data = self._process.stdout.read(chunk_bytes)
                 if not data:
                     break
-                samples = np.frombuffer(data, dtype=np.int16)
-                if len(samples) < 2:
+                data = remainder + data
+                # Align to stereo frame boundary (4 bytes)
+                usable = len(data) - (len(data) % frame_bytes)
+                if usable < frame_bytes:
+                    remainder = data
                     continue
+                remainder = data[usable:]
+                samples = np.frombuffer(data[:usable], dtype=np.int16)
                 stereo = samples.reshape(-1, 2)
                 mono = stereo.mean(axis=1).astype(np.float32) / 32768.0
                 if self._audio_callback:
