@@ -102,7 +102,7 @@ Screen {
 }
 
 #audio-info {
-    height: 4;
+    height: 5;
     background: black;
     color: #a3aed2;
     padding: 0 2;
@@ -180,6 +180,9 @@ class DemodApp(App):
         ("pagedown", "rit_down", "RIT-"),
         ("v", "toggle_vfo", "VFO"),
         ("t", "clear_cw_text", "ClrTxt"),
+        ("n", "toggle_nb", "NB"),
+        ("N", "cycle_nb_threshold", "NB Thr"),
+        ("f", "cycle_dnr", "DNR"),
     ]
 
     utc_display = reactive("--:-- UTC")
@@ -435,13 +438,19 @@ class DemodApp(App):
         s_filled = int(s_frac * 20)
         s_bar = "█" * s_filled + "░" * (20 - s_filled)
 
+        # Noise reduction status
+        nb_str = f"NB: {'ON':3s} ({self.demod.nb_threshold_name})" if self.demod.nb_enabled else "NB: OFF      "
+        dnr_lvl = self.demod.dnr_level
+        dnr_str = f"DNR: {dnr_lvl}" if dnr_lvl > 0 else "DNR: OFF"
+
         text = (
             f"{'    Vol: [' + vol_bar + '] ' + str(vol_pct) + '%' + mute_str:<46s}"
             f"AGC:  {agc_str} ({agc_gain_db:+.0f} dB)\n"
             f"{'  Audio: [' + level_bar + '] ' + f'{level_db:.0f} dB':<46s}"
             f"{'Buf: [' + buf_bar + '] ' + f'{fill_pct:2d}%  Underruns: {underruns}'}\n"
             f"{'   Peak: [' + peak_bar + '] ' + f'{self.peak_db:.1f} dBFS':<46s}"
-            f"  S: [{s_bar}] {s_unit}"
+            f"  S: [{s_bar}] {s_unit}\n"
+            f"     {nb_str}    {dnr_str}"
         )
         w.update(text)
 
@@ -451,6 +460,13 @@ class DemodApp(App):
             return "RIT:    0 Hz"
         sign = "+" if self.rit_offset > 0 else "-"
         return f"RIT: {sign}{abs(self.rit_offset):3d} Hz"
+
+    def _snr_str(self):
+        """Format SNR measurement for display."""
+        snr = self.demod.get_snr_db()
+        if snr > 0.5:
+            return f"SNR: {snr:.0f} dB"
+        return "SNR: -- dB"
 
     def _update_mode_info(self):
         w = self.query_one("#mode-info", Static)
@@ -469,9 +485,11 @@ class DemodApp(App):
         elif mode in ("SAM", "SAM-U", "SAM-L"):
             offset = self.demod.get_pll_offset_hz()
             sign = "+" if offset >= 0 else "-"
-            w.update(f"   PLL Offset: {sign}{abs(offset):6.1f} Hz")
+            w.update(f"   PLL Offset: {sign}{abs(offset):6.1f} Hz    {self._snr_str()}")
         elif mode in ("USB", "LSB"):
-            w.update(f"   {self._rit_str()}")
+            w.update(f"   {self._rit_str()}    {self._snr_str()}")
+        elif mode == "AM":
+            w.update(f"   {self._snr_str()}")
         else:
             w.update("")
 
@@ -516,7 +534,7 @@ class DemodApp(App):
 
     def _update_status(self):
         bar = self.query_one("#status-bar", Static)
-        bar.update("  c:Connect  d:Disc  r:Recon  m:Mute  a:AGC  x:Mode  v:VFO  +/-:Vol  \\[/]:BW  ←/→:Tune  PgU/D:RIT  S-←/→:Zoom  /:Freq")
+        bar.update("  c:Connect  d:Disc  r:Recon  m:Mute  a:AGC  x:Mode  v:VFO  +/-:Vol  \\[/]:BW  ←/→:Tune  PgU/D:RIT  S-←/→:Zoom  /:Freq  n:NB  f:DNR")
 
     # --- IQ data callback (from network thread) ---
 
@@ -680,6 +698,18 @@ class DemodApp(App):
     def action_clear_cw_text(self):
         """Clear the decoded CW text buffer."""
         self.demod.clear_cw_text()
+
+    def action_toggle_nb(self):
+        self.demod.nb_enabled = not self.demod.nb_enabled
+        self._update_audio_info()
+
+    def action_cycle_nb_threshold(self):
+        self.demod.cycle_nb_threshold()
+        self._update_audio_info()
+
+    def action_cycle_dnr(self):
+        self.demod.cycle_dnr_level()
+        self._update_audio_info()
 
     def action_volume_up(self):
         self.demod.volume = min(1.0, self.demod.volume + 0.05)

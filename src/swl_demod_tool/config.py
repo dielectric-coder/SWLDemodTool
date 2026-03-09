@@ -17,6 +17,11 @@ DEFAULTS = {
     "drm": {
         "dream_path": "",
     },
+    "noise_reduction": {
+        "nb_enabled": "false",
+        "nb_threshold": "Med",
+        "dnr_level": "0",
+    },
 }
 
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.2] - 2026-03-09
+
+### Added
+- **Noise Blanker (NB)**: Impulse noise suppression on raw IQ at full sample rate (192 kHz). EMA-based impulse detection with lookahead delay buffer and holdoff. Three threshold presets (Low 10×, Med 20×, High 40×). Toggle with `n`, cycle threshold with `Shift+N`.
+- **Dynamic Noise Reduction (DNR)**: Spectral gate on detected audio using 512-point STFT with 50% overlap. Percentile-based noise floor estimation from passband bins. Three levels controlling gate threshold and attenuation depth. Cycle with `f`.
+- **SNR estimator**: In-band signal-to-noise ratio from decimated IQ using 1024-point FFT. Median-based noise floor (robust to carriers/tones), asymmetric smoothing. Displayed for AM, SAM, USB, LSB modes.
+- NB/DNR status line in audio info panel
+- `[noise_reduction]` config section for NB/DNR defaults
+
 ## [0.4.1] - 2026-03-09
 
 ### Security

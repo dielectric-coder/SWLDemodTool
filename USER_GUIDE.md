@@ -65,6 +65,9 @@ The app auto-connects on startup to `localhost:4533` (IQ) and `localhost:4532` (
 | `/`             | Direct frequency entry (kHz, tunes active VFO) |
 | `Shift+→`       | Zoom into spectrum                  |
 | `Shift+←`       | Zoom out of spectrum                |
+| `n`             | Toggle Noise Blanker on/off         |
+| `N` (Shift+N)   | Cycle NB threshold (Low / Med / High) |
+| `f`             | Cycle DNR level (Off / 1 / 2 / 3)  |
 | `t`             | Clear decoded CW text               |
 | `q`             | Quit                                |
 | `Escape`        | Unfocus text input                  |
@@ -82,6 +85,7 @@ The app auto-connects on startup to `localhost:4533` (IQ) and `localhost:4532` (
     Vol: [████████████░░░░░░░░]  60%        AGC:  ON  (+40 dB)
   Audio: [████░░░░░░░░░░░░░░░░]  -42 dB    Buf: [██████████░░░░░░░░░░] 50%
    Peak: [██████░░░░░░░░░░░░░░]  -85.3 dBFS  S: [████████░░░░░░░░░░░░] S7
+     NB: ON (Med)    DNR: 2
    Tune: [░░░░░░░░░░█░░░░░░░░░░] +  3.1 Hz    SNR: 18 dB    22 WPM    RIT:  +30 Hz
 ```
 
@@ -107,8 +111,8 @@ A dedicated panel below the audio info displays mode-specific indicators:
 - **Connection status** - IQ stream, CAT control, and audio output status with sample rate info
 - **Radio info** - Active VFO, tuned frequency, operating mode, bandwidth
 - **Spectrum** - Multi-row bar graph of the received spectrum with center frequency marker and zoom span
-- **Audio info** - Volume, audio level, peak signal, S-meter, AGC status, buffer fill
-- **Mode info** - Mode-specific indicators (CW tuning/SNR/WPM, DRM status, SAM offset, RIT)
+- **Audio info** - Volume, audio level, peak signal, S-meter, AGC status, buffer fill, noise reduction status
+- **Mode info** - Mode-specific indicators (CW tuning/SNR/WPM, DRM status, SAM offset, SNR, RIT)
 
 ## Demodulation Modes
 
@@ -141,6 +145,33 @@ The mode info panel shows a tuning indicator, tone SNR, estimated keying speed (
 ### RIT (Receiver Incremental Tuning)
 
 In SSB and CW modes, `PgUp`/`PgDn` tune the receiver in 10 Hz steps. The cumulative RIT offset is shown in the mode info panel. RIT resets to zero when using coarse/fine tuning, direct frequency entry, or changing mode.
+
+### Noise Reduction
+
+Two noise reduction features operate at different stages of the DSP pipeline:
+
+**Noise Blanker (NB)** — Press `n` to toggle. Operates on the raw IQ signal before any filtering. Detects and zeros out short impulse noise (power line interference, ignition noise, switching power supplies). Use `Shift+N` to cycle threshold sensitivity:
+
+| Threshold | Factor | Best for |
+|-----------|--------|----------|
+| Low       | 10×    | Strong impulses only |
+| Med       | 20×    | General purpose (default) |
+| High      | 40×    | Weak/frequent impulses |
+
+**Dynamic Noise Reduction (DNR)** — Press `f` to cycle through levels. Operates on the detected audio using a spectral gate with percentile-based noise floor estimation. Reduces broadband noise (hiss) while preserving signal content. The noise floor takes 1-2 seconds to settle after tuning.
+
+| Level | Noise reduction | Character |
+|-------|----------------|-----------|
+| Off   | —              | —         |
+| 1     | -2 dB          | Gentle, minimal artifacts |
+| 2     | -3 dB          | Moderate |
+| 3     | -4 dB          | Aggressive, deepest suppression |
+
+DNR works best on stationary broadband noise (atmospheric hiss, receiver thermal noise) with a signal present. It has no effect in DRM mode (Dream handles its own decoding).
+
+### SNR Indicator
+
+In AM, SAM, USB, and LSB modes, the mode info panel shows an estimated in-band signal-to-noise ratio. The measurement compares total passband power to the noise floor (estimated from the median of spectral bins). It updates continuously and takes a few seconds to stabilize after tuning.
 
 Mode and bandwidth are independent of the radio's settings — they are controlled locally in the app. VFO and frequency are polled from the radio so changes made on the radio or other apps are reflected.
 
@@ -180,5 +211,14 @@ dream_path = /path/to/dream
 ```
 
 The `[drm]` section is optional. If `dream_path` is empty or omitted, the app searches for Dream automatically.
+
+The `[noise_reduction]` section stores noise reduction defaults:
+
+```ini
+[noise_reduction]
+nb_enabled = false
+nb_threshold = Med
+dnr_level = 0
+```
 
 Command-line options override config file values.

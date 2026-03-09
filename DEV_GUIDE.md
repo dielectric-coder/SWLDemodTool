@@ -8,7 +8,7 @@ src/swl_demod_tool/
     app.py            # Textual TUI application (entry point: main())
     iq_client.py      # TCP client for IQ sample stream
     cat_client.py     # TCP client for CAT radio control
-    dsp.py            # DSP: FFT spectrum, sparkline rendering, AM/SSB/CW demodulator
+    dsp.py            # DSP: FFT spectrum, sparkline rendering, AM/SSB/CW demodulator, noise reduction
     drm.py            # DRM decoder integration (Dream subprocess)
     audio.py          # Audio output via sounddevice with ring buffer
     config.py         # INI config file handling
@@ -106,8 +106,10 @@ Mode codes in IF response (char 29): 1=LSB, 2=USB, 3=CW, 4=FM, 5=AM, 7=CW-R
 
 **AM/SAM/SSB/CW demodulation:**
 ```
-IQ (192 kHz) -> FIR lowpass (127-tap, scipy firwin)
+IQ (192 kHz) -> [Noise Blanker] (impulse detection + zeroing)
+             -> FIR lowpass (127-tap, scipy firwin)
              -> decimate (divide by 4)
+             -> SNR measurement (percentile-based, passband bins)
              -> detection:
                   AM    = envelope (magnitude)
                   SAM   = PLL coherent (dot)
@@ -115,12 +117,19 @@ IQ (192 kHz) -> FIR lowpass (127-tap, scipy firwin)
                   SAM-L = PLL coherent (dot - cross)
                   USB/LSB = product (I channel)
                   CW+/CW- = audio-rate lowpass (255-tap) -> BFO mix (±700 Hz)
+             -> [DNR] (spectral gate, STFT overlap-add)
              -> DC removal (smoothed mean subtraction)
              -> AGC (block-based, fast attack / slow decay)
              -> volume / mute
              -> hard clip [-1, 1]
              -> audio output (48 kHz)
 ```
+
+**Noise Blanker:** Operates on raw IQ at full sample rate (192 kHz). Computes instantaneous magnitude and compares against a slow EMA average. Samples exceeding `threshold × average` are zeroed, with an 8-sample lookahead delay buffer and 4-sample holdoff to catch the rising edge of impulses. Three threshold presets (Low 10×, Med 20×, High 40×).
+
+**DNR (Dynamic Noise Reduction):** Spectral gate using 512-point STFT with 50% overlap (Hann window, proper synthesis window for OLA reconstruction). Noise floor estimated per-frame as the 30th percentile of passband bin powers (bins within the demodulation bandwidth, excluding DC). Bins above `threshold × noise_floor` pass through at gain 1.0; bins at or below get attenuated to `gain_floor`; smooth linear interpolation between. DC bin always passes (preserves AM carrier). Temporal gain smoothing (0.5 factor) prevents per-frame flutter. Three levels control the gate threshold and floor depth.
+
+**SNR Estimator:** Measures in-band SNR from decimated IQ using a 1024-point FFT. Compares total passband power (mean of passband bins) to the noise floor (median of passband bins — robust to narrowband signals). Asymmetric smoothing: noise floor rises slowly (0.005) and drops fast (0.1). Result clamped to 0-60 dB.
 
 **SAM PLL:** PI loop filter (~30 Hz bandwidth at 48 kHz) with atan2-normalized phase error. Tracks carrier drift without following audio modulation.
 

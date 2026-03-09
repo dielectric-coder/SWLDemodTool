@@ -95,6 +95,13 @@ _AGC_DECAY = 0.005
 _AGC_MAX_GAIN = 100000.0
 _PLL_ALPHA = 0.005       # Proportional gain (~30 Hz loop BW at 48 kHz)
 _PLL_BETA = 1.5e-5       # Integral gain
+
+# SNR estimator constants
+_SNR_SMOOTH = 0.85          # Smoothing for signal power estimate
+_SNR_NOISE_SMOOTH = 0.95    # Smoothing for noise floor (slow-tracking)
+_SNR_NOISE_UP = 0.005       # Noise floor rises very slowly
+_SNR_NOISE_DOWN = 0.1       # Noise floor drops moderately fast
+_SNR_FFT_SIZE = 1024        # FFT size for in-band SNR measurement
 _CW_BFO_HZ = 700.0
 _CW_FFT_SIZE = 8192
 _CW_PREFILTER_HZ = 2400
@@ -108,11 +115,33 @@ _CW_PEAK_HZ_SMOOTH = 0.85
 _CW_WPM_SMOOTH = 0.8
 _CW_DIT_SMOOTH = 0.8
 
+# Noise blanker constants
+_NB_EMA_ALPHA = 0.001       # EMA smoothing for magnitude average (~slow)
+_NB_LOOKAHEAD = 8           # Samples of lookahead for blanking window
+_NB_HOLDOFF = 4             # Extend blanking window by this many samples after impulse
+_NB_THRESHOLD_PRESETS = {"Low": 10.0, "Med": 20.0, "High": 40.0}
+
+# Spectral DNR constants — spectral gate with percentile noise estimation
+_DNR_FFT_SIZE = 512
+_DNR_HOP = 256              # 50% overlap
+_DNR_NOISE_PERCENTILE = 30  # Noise floor from 30th percentile of passband bins
+_DNR_NOISE_SMOOTH = 0.90    # Smooth noise estimate across frames
+_DNR_GAIN_SMOOTH = 0.5      # Temporal gain smoothing per bin
+_DNR_RAMP_FRAMES = 5        # Frames to ramp gain from 1.0 to computed value
+# Level presets: (gate_threshold, gain_floor)
+# gate_threshold: bins above this × noise_floor pass through
+# gain_floor: attenuation for noise-only bins
+_DNR_LEVEL_PRESETS = {
+    1: (2.0, 0.15),   # Gentle: only attenuate clearly-noise bins
+    2: (3.0, 0.08),   # Moderate
+    3: (5.0, 0.03),   # Aggressive: strong gating, deep suppression
+}
+
 
 class Demodulator:
-    """AM/SSB/SAM/CW demodulator with decimation, DC removal, and AGC.
+    """AM/SSB/SAM/CW demodulator with decimation, DC removal, AGC, and noise reduction.
 
-    Pipeline: IQ (192 kHz) -> lowpass -> decimate (÷4) -> detect -> DC remove -> AGC -> audio (48 kHz)
+    Pipeline: IQ (192 kHz) -> [NB] -> lowpass -> decimate (÷4) -> detect -> [DNR] -> DC remove -> AGC -> audio (48 kHz)
     """
 
     def __init__(self, iq_sample_rate=192000, audio_rate=48000, bandwidth=5000):
@@ -125,6 +154,38 @@ class Demodulator:
 
         # Lock protecting state accessed from both UI and IQ threads
         self._lock = threading.Lock()
+
+        # Noise blanker state
+        self._nb_enabled = False
+        self._nb_threshold = 20.0
+        self._nb_threshold_name = "Med"
+        self._nb_avg_mag = 0.0
+        self._nb_delay_buf = np.zeros(_NB_LOOKAHEAD, dtype=np.complex64)
+        self._nb_holdoff_count = 0
+
+        # Spectral DNR state (spectral gate)
+        self._dnr_level = 0  # 0=off, 1/2/3
+        self._dnr_in_buf = np.zeros(0, dtype=np.float32)
+        self._dnr_prev_frame = np.zeros(_DNR_HOP, dtype=np.float32)
+        n_bins = _DNR_FFT_SIZE // 2 + 1
+        self._dnr_noise_floor = 0.0      # Scalar noise floor estimate
+        self._dnr_prev_gain = np.ones(n_bins, dtype=np.float32)
+        self._dnr_frame_count = 0
+        self._dnr_window = np.hanning(_DNR_FFT_SIZE).astype(np.float32)
+        # Synthesis window for proper overlap-add reconstruction
+        self._dnr_synth_window = self._dnr_window.copy()
+        ola_sum = np.zeros(_DNR_FFT_SIZE, dtype=np.float32)
+        ola_sum[:_DNR_HOP] += self._dnr_window[:_DNR_HOP] ** 2
+        ola_sum[_DNR_HOP:] += self._dnr_window[_DNR_HOP:] ** 2
+        ola_sum[:_DNR_HOP] += self._dnr_window[_DNR_HOP:] ** 2
+        ola_sum[_DNR_HOP:] += self._dnr_window[:_DNR_HOP] ** 2
+        self._dnr_synth_window /= np.maximum(ola_sum, 1e-10)
+
+        # SNR estimator state
+        self._snr_db = 0.0
+        self._snr_signal_power = 0.0
+        self._snr_noise_floor = 0.0
+        self._snr_buf = np.zeros(0, dtype=np.complex64)
 
         # Pre-decimation lowpass FIR filter
         self._lp_taps, self._lp_zi_i = _make_filter(127, bandwidth, iq_sample_rate)
@@ -192,6 +253,200 @@ class Demodulator:
             self._lp_taps, self._lp_zi_i = _make_filter(127, self.bandwidth, self.iq_sample_rate)
             _, self._lp_zi_q = _make_filter(127, self.bandwidth, self.iq_sample_rate)
 
+    def _measure_snr(self, i_dec, q_dec):
+        """Estimate in-band SNR from decimated IQ using spectral analysis.
+
+        Analyzes only the passband bins. Uses the median bin power as
+        noise floor estimate (robust to narrowband signals like carriers
+        and tones) and total passband power as signal+noise.
+        SNR = (signal+noise) / noise - 1, clamped to [0, 60] dB.
+        """
+        # Accumulate decimated IQ into buffer
+        iq = (i_dec + 1j * q_dec).astype(np.complex64)
+        self._snr_buf = np.concatenate((self._snr_buf, iq))
+        fft_size = _SNR_FFT_SIZE
+
+        if len(self._snr_buf) < fft_size:
+            return
+
+        # Use the most recent fft_size samples
+        frame = self._snr_buf[-fft_size:]
+        self._snr_buf = self._snr_buf[-fft_size // 2:]  # keep overlap
+
+        # Power spectrum
+        window = np.hanning(fft_size).astype(np.float32)
+        spec = np.fft.fft(frame * window)
+        spec_power = np.abs(spec) ** 2
+
+        # Select only passband bins (±bandwidth around DC)
+        bin_hz = self.audio_rate / fft_size
+        bw_bins = max(2, int(self.bandwidth / bin_hz))
+        # DC-centered: bins 0..bw_bins and (fft_size-bw_bins)..fft_size
+        passband = np.concatenate((spec_power[:bw_bins], spec_power[-bw_bins:]))
+
+        if len(passband) < 4:
+            return
+
+        # Total passband power
+        total_power = np.mean(passband)
+
+        # Noise floor: median of passband bins
+        # Median is robust to carrier and tonal components
+        noise_floor = np.median(passband)
+
+        # Smooth estimates
+        if self._snr_signal_power == 0.0:
+            self._snr_signal_power = total_power
+            self._snr_noise_floor = noise_floor
+        else:
+            self._snr_signal_power = (
+                _SNR_SMOOTH * self._snr_signal_power
+                + (1 - _SNR_SMOOTH) * total_power
+            )
+            # Asymmetric noise tracking
+            if noise_floor > self._snr_noise_floor:
+                rate = _SNR_NOISE_UP
+            else:
+                rate = _SNR_NOISE_DOWN
+            self._snr_noise_floor += rate * (noise_floor - self._snr_noise_floor)
+
+        if self._snr_noise_floor > 1e-20:
+            # SNR = (S+N)/N - 1 = S/N, in dB
+            ratio = self._snr_signal_power / self._snr_noise_floor
+            if ratio > 1.0:
+                self._snr_db = max(0.0, min(60.0, 10.0 * np.log10(ratio - 1.0)))
+            else:
+                self._snr_db = 0.0
+
+    def _noise_blank(self, iq_samples):
+        """Apply impulse noise blanking on raw IQ samples.
+
+        Detects impulses that exceed threshold * running average magnitude,
+        and replaces them with zeros. Uses a small lookahead delay buffer.
+        """
+        mag = np.abs(iq_samples)
+        n = len(mag)
+        out = np.empty(n, dtype=np.complex64)
+        threshold = self._nb_threshold
+        avg = self._nb_avg_mag
+        holdoff = self._nb_holdoff_count
+        delay_buf = self._nb_delay_buf
+        lookahead = _NB_LOOKAHEAD
+
+        # Process with lookahead: delay output by lookahead samples
+        # so we can blank samples just before an impulse
+        for i in range(n):
+            # Update running average (exclude impulses from average)
+            if mag[i] < threshold * avg or avg < 1e-15:
+                avg += _NB_EMA_ALPHA * (mag[i] - avg)
+
+            # Check if current sample is an impulse
+            if avg > 1e-15 and mag[i] > threshold * avg:
+                holdoff = _NB_HOLDOFF + lookahead
+            elif holdoff > 0:
+                holdoff -= 1
+
+            # Output delayed sample (blank if in holdoff window)
+            oldest = delay_buf[0]
+            if holdoff > 0:
+                out[i] = 0.0
+            else:
+                out[i] = oldest
+
+            # Shift delay buffer and insert new sample
+            delay_buf[:-1] = delay_buf[1:]
+            delay_buf[-1] = iq_samples[i]
+
+        self._nb_avg_mag = avg
+        self._nb_holdoff_count = holdoff
+        return out
+
+    def _apply_dnr(self, audio):
+        """Spectral gate noise reduction.
+
+        Uses percentile-based noise floor estimation from passband bins.
+        Bins above the noise floor pass through; bins at or below are
+        attenuated. Temporal gain smoothing prevents flutter.
+        """
+        level = self._dnr_level
+        if level == 0:
+            return audio
+
+        gate_thresh, gain_floor = _DNR_LEVEL_PRESETS[level]
+        fft_size = _DNR_FFT_SIZE
+        hop = _DNR_HOP
+
+        # Accumulate input
+        self._dnr_in_buf = np.concatenate((self._dnr_in_buf, audio))
+        output_pieces = []
+
+        while len(self._dnr_in_buf) >= fft_size:
+            frame = self._dnr_in_buf[:fft_size]
+            self._dnr_in_buf = self._dnr_in_buf[hop:]
+
+            # Analysis
+            spectrum = np.fft.rfft(frame * self._dnr_window)
+            power = np.abs(spectrum) ** 2
+
+            self._dnr_frame_count += 1
+
+            # --- Noise floor: percentile of passband bins ---
+            bw_bins = max(4, int(self.bandwidth / (self.audio_rate / fft_size)))
+            passband_power = power[1:bw_bins + 1]  # skip DC bin
+            frame_noise = np.percentile(passband_power, _DNR_NOISE_PERCENTILE)
+
+            if self._dnr_noise_floor == 0.0:
+                self._dnr_noise_floor = frame_noise
+            else:
+                self._dnr_noise_floor = (
+                    _DNR_NOISE_SMOOTH * self._dnr_noise_floor
+                    + (1 - _DNR_NOISE_SMOOTH) * frame_noise
+                )
+
+            noise_floor = max(self._dnr_noise_floor, 1e-20)
+
+            # --- Spectral gate: smooth transition from floor to 1.0 ---
+            # snr_bin = power / noise_floor
+            # gain = floor when snr_bin <= 1
+            # gain = 1.0  when snr_bin >= gate_thresh
+            # smooth interpolation between
+            snr_bin = power / noise_floor
+            gain = np.where(
+                snr_bin >= gate_thresh,
+                1.0,
+                np.where(
+                    snr_bin <= 1.0,
+                    gain_floor,
+                    gain_floor + (1.0 - gain_floor) * (snr_bin - 1.0) / (gate_thresh - 1.0)
+                )
+            )
+            # Always pass DC bin (carrier in AM)
+            gain[0] = 1.0
+
+            # Temporal smoothing to prevent flutter
+            gain = _DNR_GAIN_SMOOTH * self._dnr_prev_gain + (1 - _DNR_GAIN_SMOOTH) * gain
+            self._dnr_prev_gain = gain.copy()
+
+            # Ramp gain from 1.0 during first few frames
+            if self._dnr_frame_count <= _DNR_RAMP_FRAMES:
+                ramp = self._dnr_frame_count / _DNR_RAMP_FRAMES
+                gain = 1.0 - ramp * (1.0 - gain)
+
+            # Apply gain and synthesize
+            filtered = spectrum * gain
+            out_frame = (
+                np.fft.irfft(filtered, n=fft_size) * self._dnr_synth_window
+            ).astype(np.float32)
+
+            # Overlap-add
+            out_frame[:hop] += self._dnr_prev_frame
+            self._dnr_prev_frame = out_frame[hop:].copy()
+            output_pieces.append(out_frame[:hop])
+
+        if output_pieces:
+            return np.concatenate(output_pieces)
+        return np.array([], dtype=np.float32)
+
     def process(self, iq_samples):
         """Demodulate AM/SSB from complex IQ samples.
 
@@ -199,6 +454,12 @@ class Demodulator:
         """
         if len(iq_samples) < self.decimation:
             return np.array([], dtype=np.float32)
+
+        # Noise blanker (pre-filter, on raw IQ at full sample rate)
+        with self._lock:
+            nb_on = self._nb_enabled
+        if nb_on:
+            iq_samples = self._noise_blank(iq_samples)
 
         # Separate I and Q
         i_in = iq_samples.real.astype(np.float32)
@@ -212,6 +473,9 @@ class Demodulator:
         i_dec = i_filt[::self.decimation]
         q_dec = q_filt[::self.decimation]
 
+        # SNR measurement (from filtered, decimated IQ)
+        self._measure_snr(i_dec, q_dec)
+
         # Detection
         if self.mode in ("CW+", "CW-"):
             detected = self._detect_cw(i_dec, q_dec)
@@ -221,6 +485,14 @@ class Demodulator:
             detected = self._pll_detect(i_dec, q_dec, self.mode)
         else:
             detected = np.sqrt(i_dec ** 2 + q_dec ** 2)
+
+        # Spectral DNR (post-detection, pre-DC removal)
+        with self._lock:
+            dnr_level = self._dnr_level
+        if dnr_level > 0:
+            detected = self._apply_dnr(detected)
+            if len(detected) == 0:
+                return np.array([], dtype=np.float32)
 
         # DC removal
         block_mean = np.mean(detected)
@@ -349,6 +621,48 @@ class Demodulator:
     def agc_enabled(self, value):
         with self._lock:
             self._agc_enabled = value
+
+    @property
+    def nb_enabled(self):
+        with self._lock:
+            return self._nb_enabled
+
+    @nb_enabled.setter
+    def nb_enabled(self, value):
+        with self._lock:
+            self._nb_enabled = value
+
+    @property
+    def nb_threshold_name(self):
+        with self._lock:
+            return self._nb_threshold_name
+
+    def cycle_nb_threshold(self):
+        """Cycle NB threshold through Low -> Med -> High -> Low."""
+        names = ["Low", "Med", "High"]
+        with self._lock:
+            idx = names.index(self._nb_threshold_name) if self._nb_threshold_name in names else 0
+            self._nb_threshold_name = names[(idx + 1) % len(names)]
+            self._nb_threshold = _NB_THRESHOLD_PRESETS[self._nb_threshold_name]
+
+    @property
+    def dnr_level(self):
+        with self._lock:
+            return self._dnr_level
+
+    @dnr_level.setter
+    def dnr_level(self, value):
+        with self._lock:
+            self._dnr_level = value
+
+    def cycle_dnr_level(self):
+        """Cycle DNR level: 0 -> 1 -> 2 -> 3 -> 0."""
+        with self._lock:
+            self._dnr_level = (self._dnr_level + 1) % 4
+
+    def get_snr_db(self):
+        """Return estimated in-band SNR in dB."""
+        return self._snr_db
 
     @property
     def bfo_offset(self):
@@ -529,9 +843,25 @@ class Demodulator:
         return out
 
     def reset(self):
-        """Reset all filter, AGC, and PLL state."""
+        """Reset all filter, AGC, PLL, and noise reduction state."""
         self._lp_taps, self._lp_zi_i = _make_filter(127, self.bandwidth, self.iq_sample_rate)
         _, self._lp_zi_q = _make_filter(127, self.bandwidth, self.iq_sample_rate)
+        # Reset SNR estimator
+        self._snr_db = 0.0
+        self._snr_signal_power = 0.0
+        self._snr_noise_floor = 0.0
+        self._snr_buf = np.zeros(0, dtype=np.complex64)
+        # Reset noise blanker
+        self._nb_avg_mag = 0.0
+        self._nb_delay_buf[:] = 0.0
+        self._nb_holdoff_count = 0
+        # Reset spectral DNR
+        n_bins = _DNR_FFT_SIZE // 2 + 1
+        self._dnr_in_buf = np.zeros(0, dtype=np.float32)
+        self._dnr_prev_frame = np.zeros(_DNR_HOP, dtype=np.float32)
+        self._dnr_noise_floor = 0.0
+        self._dnr_prev_gain = np.ones(n_bins, dtype=np.float32)
+        self._dnr_frame_count = 0
         self._dc_avg = 0.0
         self._agc_gain = _AGC_INITIAL_GAIN
         self._pll_phase = 0.0
