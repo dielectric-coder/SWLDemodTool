@@ -383,8 +383,7 @@ class DemodApp(App):
         elif self._cw_tone_hold > 0:
             self._cw_tone_hold -= 1
         if self._cw_tone_hold <= 0:
-            self.demod._cw_wpm = 0.0
-            self.demod._cw_element_ms = []
+            self.demod.clear_cw_timing()
             return f"   Tune: [{''.join(bar)}] - ---.- Hz    SNR: -- dB    -- WPM"
         peak = self.demod.get_cw_peak_hz()
         target = self.demod._bfo_offset  # 700 Hz
@@ -689,7 +688,7 @@ class DemodApp(App):
 
     def action_clear_cw_text(self):
         """Clear the decoded CW text buffer."""
-        self.demod._cw_decoded_text = ""
+        self.demod.clear_cw_text()
 
     def action_volume_up(self):
         self.demod.volume = min(1.0, self.demod.volume + 0.05)

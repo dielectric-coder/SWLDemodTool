@@ -427,6 +427,16 @@ class Demodulator:
         """Return the decoded CW text buffer."""
         return self._cw_decoded_text
 
+    def clear_cw_text(self):
+        """Clear the decoded CW text buffer (thread-safe)."""
+        self._cw_decoded_text = ""
+
+    def clear_cw_timing(self):
+        """Clear CW speed/element state (thread-safe, called from UI)."""
+        self._cw_wpm = 0.0
+        self._cw_element_ms = []
+        self._cw_dit_ms = 0.0
+
     def get_cw_peak_hz(self):
         """Return the smoothed peak audio frequency in CW mode."""
         return self._cw_peak_hz
