@@ -55,7 +55,7 @@ The app auto-connects on startup to `localhost:4533` (IQ) and `localhost:4532` (
 | `r`             | Reconnect                           |
 | `m`             | Toggle mute                         |
 | `a`             | Toggle AGC                          |
-| `x`             | Cycle mode (AM → SAM → SAM-U → SAM-L → USB → LSB → CW+ → CW- → DRM) |
+| `x`             | Cycle mode (AM → SAM → ... → CW± → RTTY → PSK31 → DRM) |
 | `v`             | Toggle VFO (A ↔ B)                  |
 | `+` / `-`       | Volume up / down                    |
 | `]` / `[`       | Increase / decrease demod bandwidth |
@@ -68,7 +68,8 @@ The app auto-connects on startup to `localhost:4533` (IQ) and `localhost:4532` (
 | `n`             | Toggle Noise Blanker on/off         |
 | `N` (Shift+N)   | Cycle NB threshold (Low / Med / High) |
 | `f`             | Cycle DNR level (Off / 1 / 2 / 3)  |
-| `t`             | Clear decoded CW text               |
+| `p`             | Toggle CW Audio Peak Filter (APF)  |
+| `t`             | Clear decoded text (CW/RTTY/PSK31)  |
 | `q`             | Quit                                |
 | `Escape`        | Unfocus text input                  |
 
@@ -102,6 +103,10 @@ A dedicated panel below the audio info displays mode-specific indicators:
   - Dim `-` = not present
 - Coding info shows the SDC and MSC QAM constellation (e.g., `SDC 16-QAM, MSC 64-QAM`) when available from the Dream decoder
 
+**RTTY mode:** Baud rate, shift, SNR, and live decoded Baudot text.
+
+**PSK31 mode:** Baud rate, SNR, and live decoded Varicode text.
+
 **SAM modes:** PLL tracking offset in Hz.
 
 **SSB modes (USB/LSB):** RIT offset.
@@ -127,6 +132,8 @@ A dedicated panel below the audio info displays mode-specific indicators:
 | LSB   | Product (I channel) | Lower sideband, 2.4 kHz bandwidth |
 | CW+   | Product + BFO (+700 Hz) | Morse code, upper sideband, 500 Hz bandwidth |
 | CW-   | Product + BFO (-700 Hz) | Morse code, lower sideband, 500 Hz bandwidth |
+| RTTY  | FSK (mark/space)        | Radio Teletype, 45.45 Bd, 170 Hz shift, Baudot |
+| PSK31 | BPSK differential       | Phase Shift Keying, 31.25 Bd, Varicode |
 | DRM   | Dream decoder | Digital Radio Mondiale, requires Dream binary |
 
 ### SAM and ECSS
@@ -142,6 +149,14 @@ When a SAM mode is active, the mode info panel displays the PLL tracking offset 
 CW+ and CW- demodulate Morse code (CW) signals using a product detector with a 700 Hz BFO (beat frequency oscillator) tone offset. CW+ uses the upper sideband (+700 Hz), CW- uses the lower sideband (-700 Hz). The default bandwidth is 500 Hz; use `]`/`[` to adjust from 100 Hz (very narrow, contest use) to 1000 Hz (wide, signal finding) in 50 Hz steps.
 
 The mode info panel shows a tuning indicator, tone SNR, estimated keying speed (WPM), and live decoded Morse text. The decoder needs ~4 elements to establish timing, then produces characters as they are keyed. Unknown sequences display as `␣`. Press `t` to clear the decoded text. Use `PgUp`/`PgDn` for 10 Hz RIT tuning to zero-beat the signal precisely.
+
+### RTTY Mode
+
+RTTY (Radio Teletype) demodulates FSK signals using the amateur standard: 2125 Hz mark tone, 2295 Hz space tone (170 Hz shift), 45.45 baud. The demodulator uses dual bandpass filters to isolate mark and space tones, compares their envelopes to make bit decisions, and recovers the bit clock from the start bit. Characters are decoded using the ITA2/Baudot 5-bit code with LTRS/FIGS shift support. Default bandwidth is 2400 Hz (adjustable 1200-3200 Hz). Decoded text appears in the mode info panel; press `t` to clear.
+
+### PSK31 Mode
+
+PSK31 (BPSK31) demodulates Phase Shift Keying signals at 31.25 baud. The audio signal is downconverted to baseband at the carrier frequency (~1000 Hz), lowpass filtered, and accumulated over each symbol period. Differential phase detection compares consecutive symbols: same phase = 1, phase reversal = 0. Characters are decoded using Varicode (variable-length codes where common characters like 'e' and space have the shortest codes, separated by two consecutive zeros). Default bandwidth is 500 Hz (adjustable 200-1000 Hz). Decoded text appears in the mode info panel; press `t` to clear.
 
 ### RIT (Receiver Incremental Tuning)
 

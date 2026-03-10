@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.4] - 2026-03-10
+
+### Added
+- **RTTY demodulation mode**: FSK demodulator for Radio Teletype with ITA2/Baudot decoder. Mark 2125 Hz, space 2295 Hz (170 Hz shift), 45.45 baud. Dual bandpass filters for mark/space tone separation, envelope-based discriminator, start-bit synchronized clock recovery, 5-bit Baudot framing with LTRS/FIGS shift support. Live decoded text in mode info panel.
+- **BPSK31 demodulation mode**: Phase Shift Keying 31.25 baud demodulator with Varicode decoder. NCO downconversion to baseband, 127-tap lowpass I/Q filtering, symbol-period accumulation, differential phase detection, and variable-length Varicode character decoding (full 128-entry ASCII table). Live decoded text in mode info panel.
+- **Audio Peak Filter (APF)**: Narrow IIR bandpass (biquad, Q=15, ~50 Hz bandwidth) centered on the CW BFO tone (700 Hz). Toggle with `p`. Helps isolate a single CW signal in a crowded band.
+- Mode cycle expanded: AM → SAM → SAM-U → SAM-L → USB → LSB → CW+ → CW- → RTTY → PSK31 → DRM → AM
+- `t` key now clears decoded text for CW, RTTY, and PSK31 modes
+
+### Fixed
+- **Rich markup crash**: Decoded text containing `:`, `[`, `]` or other Rich markup characters caused `MarkupError` in the mode info display. CW, RTTY, and PSK31 text now uses `Text` objects (bypasses markup parsing), matching the approach already used for DRM status.
+
 ## [0.4.3] - 2026-03-10
 
 ### Added

@@ -50,6 +50,7 @@ DEFAULT_KEYS = {
     "rit_down": "pagedown",
     "toggle_vfo": "v",
     "clear_cw_text": "t",
+    "toggle_apf": "p",
     "toggle_nb": "n",
     "cycle_nb_threshold": "N",
     "cycle_dnr": "f",

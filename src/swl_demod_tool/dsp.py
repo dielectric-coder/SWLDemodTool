@@ -21,6 +21,105 @@ _MORSE_TABLE = {
     "-....-": "-", "..--.-": "_", ".-..-.": '"', ".--.-.": "@",
 }
 
+# ITA2 (Baudot) code tables: 5-bit code -> character
+# LTRS shift (letters mode)
+_BAUDOT_LTRS = {
+    0b00000: '\0',  # Null
+    0b00100: ' ',   # Space
+    0b01000: '\n',  # Line feed
+    0b00010: '\r',  # Carriage return
+    0b11000: 'A', 0b10011: 'B', 0b01110: 'C', 0b10010: 'D',
+    0b10000: 'E', 0b10110: 'F', 0b01011: 'G', 0b00101: 'H',
+    0b01100: 'I', 0b11010: 'J', 0b11110: 'K', 0b01001: 'L',
+    0b00111: 'M', 0b00110: 'N', 0b00011: 'O', 0b01101: 'P',
+    0b11101: 'Q', 0b01010: 'R', 0b10100: 'S', 0b00001: 'T',
+    0b11100: 'U', 0b01111: 'V', 0b11001: 'W', 0b10111: 'X',
+    0b10101: 'Y', 0b10001: 'Z',
+}
+# FIGS shift (figures mode)
+_BAUDOT_FIGS = {
+    0b00000: '\0',  # Null
+    0b00100: ' ',   # Space
+    0b01000: '\n',  # Line feed
+    0b00010: '\r',  # Carriage return
+    0b11000: '-', 0b10011: '?', 0b01110: ':', 0b10010: '$',
+    0b10000: '3', 0b10110: '!', 0b01011: '&', 0b00101: '#',
+    0b01100: '8', 0b11010: '\'', 0b11110: '(', 0b01001: ')',
+    0b00111: '.', 0b00110: ',', 0b00011: '9', 0b01101: '0',
+    0b11101: '1', 0b01010: '4', 0b10100: '\x07',  # Bell
+    0b00001: '5', 0b11100: '7', 0b01111: ';', 0b11001: '2',
+    0b10111: '/', 0b10101: '6', 0b10001: '"',
+}
+_BAUDOT_LTRS_SHIFT = 0b11111  # Switch to letters
+_BAUDOT_FIGS_SHIFT = 0b11011  # Switch to figures
+
+# PSK31 Varicode table: character -> bit pattern (MSB first, no trailing 00)
+# Each character is a variable-length code; characters separated by two+ zeros
+_VARICODE_ENC = {
+    '\x00': '1010101011', '\x01': '1011011011', '\x02': '1011101101',
+    '\x03': '1101110111', '\x04': '1011101011', '\x05': '1101011111',
+    '\x06': '1011101111', '\x07': '1011111101', '\x08': '1011111111', # BS
+    '\x09': '11101111',   '\x0a': '11101',      # LF
+    '\x0b': '1101101111', '\x0c': '1011011101',
+    '\x0d': '11111',       # CR
+    '\x0e': '1101110101', '\x0f': '1110101011',
+    '\x10': '1011110111', '\x11': '1011110101', '\x12': '1110101101',
+    '\x13': '1110101111', '\x14': '1101011011', '\x15': '1101101011',
+    '\x16': '1101101101', '\x17': '1101010111', '\x18': '1101111011',
+    '\x19': '1101111101', '\x1a': '1110110111', '\x1b': '1101010101',
+    '\x1c': '1101011101', '\x1d': '1110111011', '\x1e': '1011111011',
+    '\x1f': '1101111111',
+    ' ': '1',          '!': '111111111',  '"': '101011111',
+    '#': '111110101',  '$': '111011011',  '%': '1011010101',
+    '&': '1010111011', "'": '101111111',  '(': '11111011',
+    ')': '11110111',   '*': '101101111',  '+': '111011111',
+    ',': '1110101',    '-': '110101',     '.': '1010111',
+    '/': '110101111',  '0': '10110111',   '1': '10111101',
+    '2': '11101101',   '3': '11111111',   '4': '101110111',
+    '5': '101011011',  '6': '101101011',  '7': '110101101',
+    '8': '110101011',  '9': '110110111',  ':': '11110101',
+    ';': '110111101',  '<': '111101101',  '=': '1010101',
+    '>': '111010111',  '?': '1010101111', '@': '1010111101',
+    'A': '1111101',    'B': '11101011',   'C': '10101101',
+    'D': '10110101',   'E': '1110111',    'F': '11011011',
+    'G': '11111101',   'H': '101010101',  'I': '1111111',
+    'J': '111111101',  'K': '101111101',  'L': '11010111',
+    'M': '10111011',   'N': '11011101',   'O': '10101011',
+    'P': '11010101',   'Q': '111011101',  'R': '10101111',
+    'S': '1101111',    'T': '1101101',    'U': '101010111',
+    'V': '110110101',  'W': '101011101',  'X': '101110101',
+    'Y': '101111011',  'Z': '1010101101',
+    '[': '111110111',  '\\': '111101111', ']': '111111011',
+    '^': '1010111111', '_': '101101101',  '`': '1011011111',
+    'a': '1011',       'b': '1011111',    'c': '101111',
+    'd': '101101',     'e': '11',         'f': '111101',
+    'g': '1011011',    'h': '101011',     'i': '1101',
+    'j': '111101011',  'k': '10111111',   'l': '11011',
+    'm': '111011',     'n': '1111',       'o': '111',
+    'p': '111111',     'q': '110111111',  'r': '10101',
+    's': '10111',      't': '101',        'u': '110111',
+    'v': '1111011',    'w': '1101011',    'x': '11011111',
+    'y': '1011101',    'z': '111010101',
+    '{': '1010110111', '|': '110111011',  '}': '1010110101',
+    '~': '1011010111', '\x7f': '1110110101',
+}
+# Build reverse lookup: bit string -> character
+_VARICODE_DEC = {v: k for k, v in _VARICODE_ENC.items()}
+
+# PSK31 constants
+_PSK31_CARRIER_HZ = 1000.0    # Nominal audio carrier frequency
+_PSK31_BAUD = 31.25            # Symbol rate
+_PSK31_FILTER_BW = 100.0       # Bandpass filter half-bandwidth (Hz)
+_PSK31_PLL_ALPHA = 0.03        # Carrier PLL proportional gain
+_PSK31_PLL_BETA = 0.002        # Carrier PLL integrator gain
+
+# RTTY constants
+_RTTY_MARK_HZ = 2125.0        # Mark tone frequency (Hz)
+_RTTY_SHIFT_HZ = 170.0        # Frequency shift (Hz), space = mark + shift
+_RTTY_BAUD = 45.45             # Standard amateur RTTY baud rate
+_RTTY_FILTER_BW = 80.0         # Bandpass filter bandwidth per tone (Hz)
+_RTTY_BIT_SMOOTH = 0.3         # EMA smoothing for mark/space discriminator
+
 # Cached Blackman window for spectrum computation
 _blackman_cache = {}
 
@@ -118,6 +217,9 @@ _CW_PEAK_HZ_SMOOTH = 0.85
 _CW_WPM_SMOOTH = 0.8
 _CW_DIT_SMOOTH = 0.8
 
+# Audio Peak Filter (APF) — narrow bandpass IIR centered on BFO tone
+_APF_Q = 15.0               # Quality factor (higher = narrower, ~50 Hz BW at Q=15)
+
 # Noise blanker constants
 _NB_EMA_ALPHA = 0.001       # EMA smoothing for magnitude average (~slow)
 _NB_LOOKAHEAD = 8           # Samples of lookahead for blanking window
@@ -152,7 +254,7 @@ _AN_RAMP_FRAMES = 5         # Frames to ramp gain from 1.0 to computed value
 
 
 class Demodulator:
-    """AM/SSB/SAM/CW demodulator with decimation, DC removal, AGC, and noise reduction.
+    """AM/SSB/SAM/CW/RTTY demodulator with decimation, DC removal, AGC, and noise reduction.
 
     Pipeline: IQ (192 kHz) -> [NB] -> lowpass -> decimate (÷4) -> detect -> [DNR] -> [Auto Notch] -> DC remove -> AGC -> audio (48 kHz)
     """
@@ -268,10 +370,76 @@ class Demodulator:
         # collected before _cw_dit_ms is established, replayed once WPM locks
         self._cw_pending_edges = []
 
+        # Audio Peak Filter (APF) — narrow IIR bandpass on BFO tone
+        self._apf_enabled = False
+        self._apf_b, self._apf_a = self._make_apf_coeffs()
+        self._apf_zi = np.zeros(2, dtype=np.float64)
+
+        # RTTY demodulator state
+        self._rtty_mark_phase = 0.0
+        self._rtty_space_phase = 0.0
+        self._rtty_mark_hz = _RTTY_MARK_HZ
+        self._rtty_space_hz = _RTTY_MARK_HZ + _RTTY_SHIFT_HZ
+        self._rtty_baud = _RTTY_BAUD
+        self._rtty_samples_per_bit = self.audio_rate / self._rtty_baud
+        self._rtty_bit_acc = 0.0       # Smoothed mark-space discriminator
+        self._rtty_bit_phase = 0.0     # Phase within current bit (0..1)
+        self._rtty_shift_reg = 0       # 5-bit shift register
+        self._rtty_bit_count = 0       # Bits received in current character
+        self._rtty_state = "IDLE"      # IDLE, DATA, STOP
+        self._rtty_figs_mode = False   # True = figures shift active
+        self._rtty_decoded_text = ""
+        # Mark/space bandpass filters (built on first use or mode switch)
+        self._rtty_mark_bp = None
+        self._rtty_space_bp = None
+        self._rtty_mark_zi = None
+        self._rtty_space_zi = None
+
+        # PSK31 demodulator state
+        self._psk_carrier_hz = _PSK31_CARRIER_HZ
+        self._psk_lo_phase = 0.0       # Local oscillator phase
+        self._psk_lo_freq = 2.0 * np.pi * _PSK31_CARRIER_HZ / self.audio_rate
+        self._psk_samples_per_sym = self.audio_rate / _PSK31_BAUD
+        self._psk_sym_phase = 0.0      # Phase within current symbol (0..samples_per_sym)
+        self._psk_prev_symbol = 1.0 + 0j  # Previous symbol's complex value
+        self._psk_bit_buf = ""         # Accumulated Varicode bits
+        self._psk_decoded_text = ""
+        # Matched filter: raised-cosine pulse for one symbol period
+        sym_len = int(self._psk_samples_per_sym)
+        self._psk_matched = (1.0 - np.cos(2.0 * np.pi * np.arange(sym_len) / sym_len)).astype(np.float32) / sym_len
+        # IIR lowpass for I/Q after downconversion
+        self._psk_lp_taps = firwin(127, _PSK31_FILTER_BW, fs=self.audio_rate).astype(np.float32)
+        self._psk_lp_zi_i = np.zeros(126, dtype=np.float32)
+        self._psk_lp_zi_q = np.zeros(126, dtype=np.float32)
+        # Symbol accumulator
+        self._psk_i_acc = 0.0
+        self._psk_q_acc = 0.0
+        self._psk_acc_count = 0
+
     def _update_cw_filter(self):
         """Rebuild the post-decimation audio-rate lowpass for CW modes."""
         self._cw_taps, self._cw_zi_i = _make_filter(255, self.bandwidth, self.audio_rate)
         _, self._cw_zi_q = _make_filter(255, self.bandwidth, self.audio_rate)
+
+    def _make_apf_coeffs(self):
+        """Compute biquad bandpass coefficients centered on BFO frequency."""
+        w0 = 2.0 * np.pi * self._bfo_offset / self.audio_rate
+        alpha = np.sin(w0) / (2.0 * _APF_Q)
+        b0 = alpha
+        b1 = 0.0
+        b2 = -alpha
+        a0 = 1.0 + alpha
+        a1 = -2.0 * np.cos(w0)
+        a2 = 1.0 - alpha
+        b = np.array([b0 / a0, b1 / a0, b2 / a0])
+        a = np.array([1.0, a1 / a0, a2 / a0])
+        return b, a
+
+    def _apply_apf(self, audio):
+        """Apply the audio peak filter (narrow bandpass at BFO frequency)."""
+        filtered, self._apf_zi = lfilter(self._apf_b, self._apf_a,
+                                         audio, zi=self._apf_zi)
+        return filtered.astype(np.float32)
 
     def set_bandwidth(self, bandwidth):
         """Update the demodulation bandwidth (Hz)."""
@@ -597,6 +765,10 @@ class Demodulator:
         # Detection
         if self.mode in ("CW+", "CW-"):
             detected = self._detect_cw(i_dec, q_dec)
+        elif self.mode == "RTTY":
+            detected = self._detect_rtty(i_dec, q_dec)
+        elif self.mode == "PSK31":
+            detected = self._detect_psk31(i_dec, q_dec)
         elif self.mode in ("USB", "LSB"):
             detected = i_dec.astype(np.float32)
         elif self.mode in ("SAM", "SAM-U", "SAM-L"):
@@ -654,6 +826,12 @@ class Demodulator:
         self._bfo_phase = (phases[-1] + phase_inc) % (2.0 * np.pi)
         complex_dec = i_dec + 1j * q_dec
         detected = np.real(complex_dec * np.exp(1j * phases)).astype(np.float32)
+
+        # Audio Peak Filter — narrow bandpass centered on BFO tone
+        with self._lock:
+            apf_on = self._apf_enabled
+        if apf_on:
+            detected = self._apply_apf(detected)
 
         # Ring buffer for CW FFT (avoids np.roll copy)
         buf = self._cw_buf
@@ -800,6 +978,25 @@ class Demodulator:
         """Toggle auto notch on/off."""
         with self._lock:
             self._an_enabled = not self._an_enabled
+
+    @property
+    def apf_enabled(self):
+        with self._lock:
+            return self._apf_enabled
+
+    @apf_enabled.setter
+    def apf_enabled(self, value):
+        with self._lock:
+            self._apf_enabled = value
+
+    def toggle_apf(self):
+        """Toggle audio peak filter on/off."""
+        with self._lock:
+            self._apf_enabled = not self._apf_enabled
+            if self._apf_enabled:
+                # Reset filter state when enabling
+                self._apf_b, self._apf_a = self._make_apf_coeffs()
+                self._apf_zi = np.zeros(2, dtype=np.float64)
 
     def get_snr_db(self):
         """Return estimated in-band SNR in dB."""
@@ -962,6 +1159,232 @@ class Demodulator:
         if len(self._cw_decoded_text) > 120:
             self._cw_decoded_text = self._cw_decoded_text[-120:]
 
+    def _init_rtty_filters(self):
+        """Build bandpass filters for RTTY mark and space tones."""
+        mark = self._rtty_mark_hz
+        space = self._rtty_space_hz
+        bw = _RTTY_FILTER_BW
+        sr = self.audio_rate
+        ntaps = 255
+        # Mark bandpass
+        lo = max(1.0, mark - bw / 2)
+        hi = min(sr / 2 - 1, mark + bw / 2)
+        self._rtty_mark_bp = firwin(ntaps, [lo, hi], pass_zero=False, fs=sr).astype(np.float32)
+        self._rtty_mark_zi = np.zeros(ntaps - 1, dtype=np.float32)
+        # Space bandpass
+        lo = max(1.0, space - bw / 2)
+        hi = min(sr / 2 - 1, space + bw / 2)
+        self._rtty_space_bp = firwin(ntaps, [lo, hi], pass_zero=False, fs=sr).astype(np.float32)
+        self._rtty_space_zi = np.zeros(ntaps - 1, dtype=np.float32)
+
+    def _detect_rtty(self, i_dec, q_dec):
+        """RTTY FSK detection: bandpass mark/space, envelope compare, bit clock recovery, Baudot decode.
+
+        Takes decimated IQ (audio-rate), outputs audio (the mark/space mixed tone for monitoring)
+        and decodes Baudot characters as a side effect.
+        """
+        # Initialize filters on first call
+        if self._rtty_mark_bp is None:
+            self._init_rtty_filters()
+
+        # Use I channel as real audio (USB demod equivalent)
+        audio = i_dec.astype(np.float32)
+
+        # Bandpass filter for mark and space tones
+        mark_sig, self._rtty_mark_zi = lfilter(
+            self._rtty_mark_bp, 1.0, audio, zi=self._rtty_mark_zi)
+        space_sig, self._rtty_space_zi = lfilter(
+            self._rtty_space_bp, 1.0, audio, zi=self._rtty_space_zi)
+
+        # Envelope detection (magnitude)
+        mark_env = np.abs(mark_sig)
+        space_env = np.abs(space_sig)
+
+        # Process each sample: discriminate mark vs space, clock recovery, decode
+        samples_per_bit = self._rtty_samples_per_bit
+        bit_acc = self._rtty_bit_acc
+        bit_phase = self._rtty_bit_phase
+
+        for k in range(len(audio)):
+            # Smoothed discriminator: positive = mark, negative = space
+            diff = mark_env[k] - space_env[k]
+            bit_acc = _RTTY_BIT_SMOOTH * bit_acc + (1 - _RTTY_BIT_SMOOTH) * diff
+            is_mark = bit_acc > 0
+
+            # Advance bit clock
+            bit_phase += 1.0 / samples_per_bit
+
+            if self._rtty_state == "IDLE":
+                # Wait for start bit (space = 0)
+                if not is_mark:
+                    self._rtty_state = "START"
+                    bit_phase = 0.0
+            elif self._rtty_state == "START":
+                # Sample at mid-bit to confirm start bit
+                if bit_phase >= 0.5:
+                    if not is_mark:
+                        # Valid start bit, begin data
+                        self._rtty_state = "DATA"
+                        self._rtty_shift_reg = 0
+                        self._rtty_bit_count = 0
+                        bit_phase = 0.0
+                    else:
+                        # False start
+                        self._rtty_state = "IDLE"
+            elif self._rtty_state == "DATA":
+                if bit_phase >= 1.0:
+                    bit_phase -= 1.0
+                    # Sample data bit (LSB first)
+                    if is_mark:
+                        self._rtty_shift_reg |= (1 << self._rtty_bit_count)
+                    self._rtty_bit_count += 1
+                    if self._rtty_bit_count >= 5:
+                        self._rtty_state = "STOP"
+            elif self._rtty_state == "STOP":
+                if bit_phase >= 1.0:
+                    # Stop bit(s) received — decode character
+                    self._rtty_decode_char(self._rtty_shift_reg)
+                    self._rtty_state = "IDLE"
+                    bit_phase = 0.0
+
+        self._rtty_bit_acc = bit_acc
+        self._rtty_bit_phase = bit_phase
+        return audio
+
+    def _rtty_decode_char(self, code):
+        """Decode a 5-bit Baudot code and append to text buffer."""
+        if code == _BAUDOT_LTRS_SHIFT:
+            self._rtty_figs_mode = False
+            return
+        if code == _BAUDOT_FIGS_SHIFT:
+            self._rtty_figs_mode = True
+            return
+
+        table = _BAUDOT_FIGS if self._rtty_figs_mode else _BAUDOT_LTRS
+        ch = table.get(code)
+        if ch is None or ch == '\0':
+            return
+        if ch == '\x07':  # Bell
+            return
+        if ch == '\r':
+            return  # Ignore CR, LF handles newlines
+        if ch == '\n':
+            ch = ' '  # Display newlines as spaces in the text buffer
+
+        self._rtty_decoded_text += ch
+        if len(self._rtty_decoded_text) > 120:
+            self._rtty_decoded_text = self._rtty_decoded_text[-120:]
+
+    def get_rtty_text(self):
+        """Return the decoded RTTY text buffer."""
+        with self._lock:
+            return self._rtty_decoded_text
+
+    def clear_rtty_text(self):
+        """Clear the decoded RTTY text buffer (thread-safe)."""
+        with self._lock:
+            self._rtty_decoded_text = ""
+
+    def _detect_psk31(self, i_dec, q_dec):
+        """BPSK31 detection: downconvert, lowpass, symbol clock recovery, differential decode, Varicode.
+
+        Returns audio (real part of baseband) for monitoring.
+        """
+        audio = i_dec.astype(np.float64)
+        n = len(audio)
+
+        # Downconvert to baseband using local oscillator
+        lo_phases = self._psk_lo_phase + self._psk_lo_freq * np.arange(n)
+        self._psk_lo_phase = (lo_phases[-1] + self._psk_lo_freq) % (2.0 * np.pi)
+        bb_i = audio * np.cos(lo_phases)
+        bb_q = audio * (-np.sin(lo_phases))
+
+        # Lowpass filter baseband I and Q
+        bb_i, self._psk_lp_zi_i = lfilter(
+            self._psk_lp_taps, 1.0, bb_i.astype(np.float32), zi=self._psk_lp_zi_i)
+        bb_q, self._psk_lp_zi_q = lfilter(
+            self._psk_lp_taps, 1.0, bb_q.astype(np.float32), zi=self._psk_lp_zi_q)
+
+        # Process samples: accumulate over symbol period, then decide
+        samples_per_sym = self._psk_samples_per_sym
+        sym_phase = self._psk_sym_phase
+        i_acc = self._psk_i_acc
+        q_acc = self._psk_q_acc
+        acc_count = self._psk_acc_count
+
+        for k in range(n):
+            i_acc += bb_i[k]
+            q_acc += bb_q[k]
+            acc_count += 1
+            sym_phase += 1.0
+
+            if sym_phase >= samples_per_sym:
+                sym_phase -= samples_per_sym
+                # Normalize accumulated symbol
+                if acc_count > 0:
+                    sym_i = i_acc / acc_count
+                    sym_q = q_acc / acc_count
+                else:
+                    sym_i = 0.0
+                    sym_q = 0.0
+
+                # Differential detection: compare phase to previous symbol
+                # BPSK: 0 = phase reversal (180°), 1 = same phase (0°)
+                current = complex(sym_i, sym_q)
+                prev = self._psk_prev_symbol
+
+                if abs(prev) > 1e-10 and abs(current) > 1e-10:
+                    # Dot product of normalized symbols gives cos(phase_diff)
+                    dot = (current.real * prev.real + current.imag * prev.imag)
+                    dot /= (abs(current) * abs(prev))
+                    bit = 1 if dot > 0 else 0
+                else:
+                    bit = 1  # Idle
+
+                self._psk_prev_symbol = current
+
+                # Varicode decode: accumulate bits, look for "00" separator
+                self._psk_bit_buf += str(bit)
+
+                if self._psk_bit_buf.endswith("00"):
+                    # Character complete — strip trailing "00"
+                    code = self._psk_bit_buf[:-2]
+                    self._psk_bit_buf = ""
+                    if code and code in _VARICODE_DEC:
+                        ch = _VARICODE_DEC[code]
+                        if ch == '\r' or ch == '\n':
+                            ch = ' '
+                        elif ord(ch) < 32 and ch != '\t':
+                            pass  # Skip non-printable control chars
+                        else:
+                            self._psk_decoded_text += ch
+                            if len(self._psk_decoded_text) > 120:
+                                self._psk_decoded_text = self._psk_decoded_text[-120:]
+                elif len(self._psk_bit_buf) > 20:
+                    # Too long without separator — noise, reset
+                    self._psk_bit_buf = ""
+
+                i_acc = 0.0
+                q_acc = 0.0
+                acc_count = 0
+
+        self._psk_sym_phase = sym_phase
+        self._psk_i_acc = i_acc
+        self._psk_q_acc = q_acc
+        self._psk_acc_count = acc_count
+
+        return i_dec.astype(np.float32)
+
+    def get_psk_text(self):
+        """Return the decoded PSK31 text buffer."""
+        with self._lock:
+            return self._psk_decoded_text
+
+    def clear_psk_text(self):
+        """Clear the decoded PSK31 text buffer (thread-safe)."""
+        with self._lock:
+            self._psk_decoded_text = ""
+
     def get_cw_text(self):
         """Return the decoded CW text buffer."""
         with self._lock:
@@ -1081,6 +1504,36 @@ class Demodulator:
         self._cw_last_keyup_sample = 0
         self._cw_dit_ms = 0.0
         self._cw_pending_edges = []
+        # Reset APF state
+        self._apf_b, self._apf_a = self._make_apf_coeffs()
+        self._apf_zi = np.zeros(2, dtype=np.float64)
+        # Reset RTTY state
+        self._rtty_mark_phase = 0.0
+        self._rtty_space_phase = 0.0
+        self._rtty_bit_acc = 0.0
+        self._rtty_bit_phase = 0.0
+        self._rtty_shift_reg = 0
+        self._rtty_bit_count = 0
+        self._rtty_state = "IDLE"
+        self._rtty_figs_mode = False
+        self._rtty_mark_bp = None  # Rebuilt on next use
+        self._rtty_space_bp = None
+        self._rtty_mark_zi = None
+        self._rtty_space_zi = None
+        # Reset PSK31 state
+        self._psk_lo_phase = 0.0
+        self._psk_lo_freq = 2.0 * np.pi * _PSK31_CARRIER_HZ / self.audio_rate
+        self._psk_sym_phase = 0.0
+        self._psk_prev_symbol = 1.0 + 0j
+        self._psk_bit_buf = ""
+        self._psk_i_acc = 0.0
+        self._psk_q_acc = 0.0
+        self._psk_acc_count = 0
+        self._psk_lp_zi_i = np.zeros(126, dtype=np.float32)
+        self._psk_lp_zi_q = np.zeros(126, dtype=np.float32)
+        with self._lock:
+            self._rtty_decoded_text = ""
+            self._psk_decoded_text = ""
         if self._cw_taps is not None:
             self._cw_taps, self._cw_zi_i = _make_filter(255, self.bandwidth, self.audio_rate)
             _, self._cw_zi_q = _make_filter(255, self.bandwidth, self.audio_rate)

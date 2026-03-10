@@ -8,7 +8,7 @@ This document explains the NB and DNR implementations in `src/swl_demod_tool/dsp
 IQ (192 kHz) -> [NB] -> FIR lowpass -> decimate (÷4) -> SNR -> detect -> [DNR] -> DC remove -> AGC -> audio (48 kHz)
 ```
 
-NB operates on raw IQ at full sample rate (before any filtering). DNR operates on detected audio (after AM/SSB/CW demodulation, before DC removal and AGC). This ordering is deliberate: NB catches impulses before they spread through the lowpass filter, while DNR works on the baseband audio where broadband noise is most apparent.
+NB operates on raw IQ at full sample rate (before any filtering). DNR operates on detected audio (after AM/SSB/CW/RTTY/PSK31 demodulation, before DC removal and AGC). This ordering is deliberate: NB catches impulses before they spread through the lowpass filter, while DNR works on the baseband audio where broadband noise is most apparent.
 
 ---
 

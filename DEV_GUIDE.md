@@ -8,7 +8,7 @@ src/swl_demod_tool/
     app.py            # Textual TUI application (entry point: main())
     iq_client.py      # TCP client for IQ sample stream
     cat_client.py     # TCP client for CAT radio control
-    dsp.py            # DSP: FFT spectrum, sparkline rendering, AM/SSB/CW demodulator, noise reduction
+    dsp.py            # DSP: FFT spectrum, sparkline rendering, AM/SSB/CW/RTTY/PSK31 demodulator, noise reduction
     drm.py            # DRM decoder integration (Dream subprocess)
     audio.py          # Audio output via sounddevice with ring buffer
     config.py         # INI config file handling
@@ -104,7 +104,7 @@ Mode codes in IF response (char 29): 1=LSB, 2=USB, 3=CW, 4=FM, 5=AM, 7=CW-R
 - Peak-hold downsampling (max per display bin) to preserve narrow signals
 - Multi-row Unicode block character rendering
 
-**AM/SAM/SSB/CW demodulation:**
+**AM/SAM/SSB/CW/RTTY/PSK31 demodulation:**
 ```
 IQ (192 kHz) -> [Noise Blanker] (impulse detection + zeroing)
              -> FIR lowpass (127-tap, scipy firwin)
@@ -117,6 +117,8 @@ IQ (192 kHz) -> [Noise Blanker] (impulse detection + zeroing)
                   SAM-L = PLL coherent (dot - cross)
                   USB/LSB = product (I channel)
                   CW+/CW- = audio-rate lowpass (255-tap) -> BFO mix (±700 Hz)
+                  RTTY  = dual bandpass (mark/space) -> envelope compare -> Baudot decode
+                  PSK31 = NCO downconvert -> lowpass I/Q -> differential phase -> Varicode decode
              -> [DNR] (spectral gate, STFT overlap-add)
              -> DC removal (smoothed mean subtraction)
              -> AGC (block-based, fast attack / slow decay)
@@ -140,6 +142,12 @@ IQ (192 kHz) -> [Noise Blanker] (impulse detection + zeroing)
 **CW speed measurement:** Sample-level envelope detection (attack ~0.5 ms, decay ~10 ms) with adaptive threshold at 40% of peak. Key-down durations are collected and clustered using iterative dit/dah separation. WPM is estimated from median dit duration (standard: 1200 / dit_ms). Exponential smoothing on the WPM output for stability.
 
 **CW Morse decoder:** Element classification uses the smoothed dit duration: marks < 2× dit = dit, ≥ 2× dit = dah. Inter-character space detected at > 2.5× dit, inter-word space at > 5× dit. Elements are accumulated per character and decoded via ITU Morse lookup table. Pending characters are flushed after prolonged silence. The decoded text buffer holds the last 120 characters (scrolling).
+
+**RTTY FSK demodulator:** Two 255-tap bandpass FIR filters (80 Hz bandwidth each) isolate the mark (2125 Hz) and space (2295 Hz) tones from the decimated I channel audio. Envelope detection computes the magnitude of each filtered signal. An EMA-smoothed discriminator (mark minus space) makes the bit decision. Clock recovery synchronizes on the start bit (space-to-mark transition at mid-bit), then samples 5 data bits (LSB first) and a stop bit. The 5-bit code is decoded via ITA2/Baudot lookup tables with LTRS/FIGS shift state tracking.
+
+**BPSK31 demodulator:** A numerically-controlled oscillator (NCO) at 1000 Hz downconverts the decimated I channel audio to baseband I/Q. Both channels are lowpass filtered (127-tap, 100 Hz cutoff). Samples are accumulated over one symbol period (48000/31.25 = 1536 samples). At each symbol boundary, the accumulated I/Q value is compared to the previous symbol using a normalized dot product: positive = same phase (bit 1), negative = phase reversal (bit 0). Bits are accumulated into a Varicode buffer; a `00` sequence signals character completion, and the preceding bits are looked up in a 128-entry decode table (full ASCII). Codes longer than 20 bits without a separator are discarded as noise.
+
+**Audio Peak Filter (APF):** A biquad IIR bandpass filter (Q=15, ~50 Hz bandwidth) centered on the CW BFO frequency (700 Hz). Applied post-detection in CW modes when enabled. Helps isolate a single CW signal in a crowded band by suppressing adjacent signals.
 
 **RIT:** 10 Hz tuning steps via PgUp/PgDn in SSB/CW modes. Cumulative offset tracked and displayed; resets on coarse/fine tuning or mode change.
 

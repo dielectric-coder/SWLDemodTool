@@ -201,6 +201,7 @@ KEYBINDING_META = {
     "cycle_nb_threshold":("Cycle NB threshold",          "Noise Reduction", "NB Thr"),
     "cycle_dnr":         ("Cycle spectral DNR level",    "Noise Reduction", "DNR"),
     "toggle_auto_notch": ("Toggle auto notch filter",    "Noise Reduction", "DNF"),
+    "toggle_apf":        ("Toggle CW audio peak filter", "CW",              "APF"),
     "toggle_spectrum":   ("Toggle spectrum display",     "Display",         "Spec"),
 }
 
@@ -357,6 +358,7 @@ class DemodApp(App):
         ("pagedown", "rit_down", "RIT\u2212"),
         ("v", "toggle_vfo", "VFO"),
         ("t", "clear_cw_text", "ClrTxt"),
+        ("p", "toggle_apf", "APF"),
         ("n", "toggle_nb", "NB"),
         ("N", "cycle_nb_threshold", "NB Thr"),
         ("f", "cycle_dnr", "DNR"),
@@ -644,6 +646,7 @@ class DemodApp(App):
         dnr_lvl = self.demod.dnr_level
         dnr_str = f"DNR: {dnr_lvl}" if dnr_lvl > 0 else "DNR: OFF"
         an_str = "DNF: ON" if self.demod.auto_notch else "DNF: OFF"
+        apf_str = "APF: ON" if self.demod.apf_enabled else "APF: OFF"
 
         text = (
             f"{'    Vol: [' + vol_bar + '] ' + str(vol_pct) + '%' + mute_str:<44s}"
@@ -653,7 +656,7 @@ class DemodApp(App):
             f"{dnr_str:<20s}"
             f"Buf: [{buf_bar}] {fill_pct:2d}%  Underruns: {underruns}\n"
             f"{'   Peak: [' + peak_bar + '] ' + f'{self.peak_db:.1f} dBFS':<44s}"
-            f"{an_str:<20s}"
+            f"{an_str:<10s}{apf_str:<10s}"
             f"  S: [{s_bar}] {s_unit}"
         )
         w.update(text)
@@ -677,11 +680,22 @@ class DemodApp(App):
         mode = self.demod.mode
         if mode in ("CW+", "CW-"):
             cw_text = self.demod.get_cw_text()
-            line1 = f"{self._cw_tuning_bar()}    {self._rit_str()}"
+            t = Text(f"{self._cw_tuning_bar()}    {self._rit_str()}")
             if cw_text:
-                w.update(f"{line1}\n   {cw_text}")
-            else:
-                w.update(line1)
+                t.append(f"\n   {cw_text}")
+            w.update(t)
+        elif mode == "RTTY":
+            rtty_text = self.demod.get_rtty_text()
+            t = Text(f"   RTTY 45.45 Bd / 170 Hz shift    {self._snr_str()}")
+            if rtty_text:
+                t.append(f"\n   {rtty_text}")
+            w.update(t)
+        elif mode == "PSK31":
+            psk_text = self.demod.get_psk_text()
+            t = Text(f"   BPSK31 31.25 Bd    {self._snr_str()}")
+            if psk_text:
+                t.append(f"\n   {psk_text}")
+            w.update(t)
         elif mode == "DRM":
             t = self._drm_status_text()
             if t is not None:
@@ -887,8 +901,8 @@ class DemodApp(App):
         self._update_audio_info()
 
     def action_cycle_mode(self):
-        """Cycle demodulation mode: AM → SAM → SAM-U → SAM-L → USB → LSB → CW+ → CW- → DRM → AM."""
-        modes = ["AM", "SAM", "SAM-U", "SAM-L", "USB", "LSB", "CW+", "CW-", "DRM"]
+        """Cycle demodulation mode: AM → SAM → SAM-U → SAM-L → USB → LSB → CW+ → CW- → RTTY → PSK31 → DRM → AM."""
+        modes = ["AM", "SAM", "SAM-U", "SAM-L", "USB", "LSB", "CW+", "CW-", "RTTY", "PSK31", "DRM"]
         old_mode = self.demod.mode
         idx = modes.index(old_mode) if old_mode in modes else 0
         new_mode = modes[(idx + 1) % len(modes)]
@@ -907,15 +921,17 @@ class DemodApp(App):
         self.demod.reset()
         self.rit_offset = 0
         # Set default bandwidth for the new mode
-        defaults = {"AM": 5000, "SAM": 5000, "SAM-U": 5000, "SAM-L": 5000, "USB": 2400, "LSB": 2400, "CW+": 500, "CW-": 500}
+        defaults = {"AM": 5000, "SAM": 5000, "SAM-U": 5000, "SAM-L": 5000, "USB": 2400, "LSB": 2400, "CW+": 500, "CW-": 500, "RTTY": 2400, "PSK31": 500}
         if new_mode in defaults:
             self.demod.set_bandwidth(defaults[new_mode])
         self._update_radio_info()
         self._spectrum_update()
 
     def action_clear_cw_text(self):
-        """Clear the decoded CW text buffer."""
+        """Clear the decoded CW/RTTY/PSK text buffer."""
         self.demod.clear_cw_text()
+        self.demod.clear_rtty_text()
+        self.demod.clear_psk_text()
 
     def action_toggle_nb(self):
         self.demod.nb_enabled = not self.demod.nb_enabled
@@ -931,6 +947,10 @@ class DemodApp(App):
 
     def action_toggle_auto_notch(self):
         self.demod.toggle_auto_notch()
+        self._update_audio_info()
+
+    def action_toggle_apf(self):
+        self.demod.toggle_apf()
         self._update_audio_info()
 
     # --- Spectrum display (swl-spectrum) ---
@@ -1023,6 +1043,10 @@ class DemodApp(App):
             return 1200, 3200, 100
         elif self.demod.mode in ("CW+", "CW-"):
             return 100, 1000, 50
+        elif self.demod.mode == "RTTY":
+            return 1200, 3200, 100
+        elif self.demod.mode == "PSK31":
+            return 200, 1000, 50
         return 100, 24000, 500  # fallback
 
     def action_bw_up(self):
