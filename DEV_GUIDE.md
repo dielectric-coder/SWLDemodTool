@@ -154,7 +154,7 @@ Dream command: dream -c 6 --sigsrate {iq_rate} --audsrate 48000 -I - -O - --stat
 - `-I -` reads raw int16 stereo IQ from stdin
 - `-O -` writes decoded int16 stereo audio to stdout
 - `-c 6` selects IQ positive, zero-IF input mode
-- `--status-socket` broadcasts JSON status via a Unix domain socket (sync, SNR, mode, service label, text, bitrate)
+- `--status-socket` broadcasts JSON status via a Unix domain socket (sync, SNR, mode, SDC/MSC QAM constellation, service label, text, bitrate, audio codec)
 
 The `DRMDecoder` class manages the subprocess lifecycle:
 - `start(audio_callback)` — spawns Dream, starts audio reader / status socket / stderr drain threads

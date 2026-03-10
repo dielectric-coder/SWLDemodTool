@@ -11,14 +11,16 @@ from collections import deque
 from datetime import datetime, timezone
 
 from textual.app import App
-from textual.containers import Horizontal, Vertical
+from textual.containers import Container, Horizontal, Vertical
+from textual.screen import ModalScreen
 from textual.widgets import Footer, Input, Static
 from textual.reactive import reactive
 from textual import work
 from rich.text import Text
 
 from swl_demod_tool import __version__
-from swl_demod_tool.config import load_config
+from swl_demod_tool.config import (load_config, load_keybindings,
+                                    keybindings_to_textual, _to_display_key)
 from swl_demod_tool.iq_client import IQClient
 from swl_demod_tool.cat_client import CATClient
 from swl_demod_tool.dsp import compute_spectrum_db, spectrum_to_sparkline, Demodulator
@@ -60,20 +62,20 @@ Screen {
     border-bottom: solid #394260;
 }
 
-#freq-bar {
-    height: 2;
+#freq-bar-wrap {
+    height: 1;
     background: black;
-    padding: 0 1;
     align-horizontal: center;
 }
 
-#freq-prompt {
-    width: 28;
-    height: 2;
+#freq-bar {
+    width: 32;
+    height: 1;
+    background: black;
 }
 
-.prompt-char {
-    width: 4;
+.freq-label {
+    width: auto;
     height: 1;
 }
 
@@ -126,6 +128,176 @@ Screen {
 }
 """
 
+HELP_CSS = """
+#help-container {
+    align: center middle;
+    width: 100%;
+    height: 100%;
+    background: black 50%;
+}
+
+#help-card {
+    width: 64;
+    height: auto;
+    max-height: 90%;
+    border: round #769ff0;
+    background: black;
+    color: #a9b1d6;
+    padding: 1 2;
+}
+
+#help-title {
+    text-style: bold;
+    text-align: center;
+    width: 100%;
+    margin-bottom: 1;
+    color: #769ff0;
+}
+
+#help-body {
+    width: 100%;
+}
+
+#help-hint {
+    text-align: center;
+    width: 100%;
+    margin-top: 1;
+    color: $text-muted;
+}
+"""
+
+# Keybinding metadata: action -> (description, section, status_bar_label or None)
+# Paired actions (down/up) share a single help entry via _PAIRED_ACTIONS.
+KEYBINDING_META = {
+    "quit":              ("Quit",                        "General",         "Quit"),
+    "unfocus":           ("Unfocus / Close popup",       "General",         None),
+    "show_help":         ("Show keyboard shortcuts",     "General",         "Help"),
+    "connect":           ("Connect to server",           "Connection",      "Connect"),
+    "disconnect":        ("Disconnect",                  "Connection",      "Disc"),
+    "reconnect":         ("Reconnect",                   "Connection",      "Recon"),
+    "toggle_mute":       ("Toggle mute",                 "Audio & Mode",    "Mute"),
+    "toggle_agc":        ("Toggle AGC",                  "Audio & Mode",    "AGC"),
+    "volume_up":         ("Volume up",                   "Audio & Mode",    None),
+    "volume_down":       ("Volume down",                 "Audio & Mode",    None),
+    "bw_up":             ("Bandwidth up",                "Audio & Mode",    None),
+    "bw_down":           ("Bandwidth down",              "Audio & Mode",    None),
+    "zoom_in":           ("Zoom in",                     "Display",         None),
+    "zoom_out":          ("Zoom out",                    "Display",         None),
+    "tune_up":           ("Tune up",                     "Tuning",          None),
+    "tune_down":         ("Tune down",                   "Tuning",          None),
+    "focus_freq":        ("Direct frequency entry (kHz)","Tuning",          "Freq"),
+    "cycle_mode":        ("Cycle demod mode",            "Audio & Mode",    "Mode"),
+    "fine_tune_up":      ("Fine tune up",                "Tuning",          None),
+    "fine_tune_down":    ("Fine tune down",              "Tuning",          None),
+    "rit_up":            ("RIT offset up",               "Tuning",          None),
+    "rit_down":          ("RIT offset down",             "Tuning",          None),
+    "toggle_vfo":        ("Toggle VFO A/B",              "Tuning",          "VFO"),
+    "clear_cw_text":     ("Clear CW decoded text",       "CW",              None),
+    "toggle_nb":         ("Toggle noise blanker",        "Noise Reduction", "NB"),
+    "cycle_nb_threshold":("Cycle NB threshold",          "Noise Reduction", "NB Thr"),
+    "cycle_dnr":         ("Cycle spectral DNR level",    "Noise Reduction", "DNR"),
+    "toggle_auto_notch": ("Toggle auto notch filter",    "Noise Reduction", "DNF"),
+}
+
+# Pairs of (down_action, up_action) shown as a single "key1 / key2" help entry
+_PAIRED_ACTIONS = [
+    ("tune_down", "tune_up"),
+    ("fine_tune_down", "fine_tune_up"),
+    ("volume_down", "volume_up"),
+    ("bw_down", "bw_up"),
+    ("zoom_out", "zoom_in"),
+    ("rit_down", "rit_up"),
+]
+
+# Section display order
+_SECTION_ORDER = [
+    "General", "Connection", "Tuning", "Audio & Mode", "Display",
+    "Noise Reduction", "CW",
+]
+
+
+def _build_shortcut_table(keys):
+    """Build help screen shortcut table from configured keybindings."""
+    paired = set()
+    pair_map = {}
+    for down, up in _PAIRED_ACTIONS:
+        paired.add(down)
+        paired.add(up)
+        pair_map[up] = down  # show pair entry at the "up" action
+
+    sections = {s: [] for s in _SECTION_ORDER}
+    for action, key in keys.items():
+        meta = KEYBINDING_META.get(action)
+        if not meta:
+            continue
+        desc, section, _ = meta
+
+        if action in paired:
+            if action in pair_map:
+                down_action = pair_map[action]
+                down_key = _to_display_key(keys.get(down_action, ""))
+                up_key = _to_display_key(key)
+                down_desc = KEYBINDING_META[down_action][0]
+                up_desc = desc
+                combined_key = f"{down_key} / {up_key}"
+                combined_desc = f"{down_desc} / {up_desc.split()[-1]}"
+                sections[section].append((combined_key, combined_desc))
+            # Skip the "down" action; it's shown via its paired "up"
+            continue
+
+        display = _to_display_key(key)
+        sections[section].append((display, desc))
+
+    return [(s, entries) for s, entries in sections.items() if entries]
+
+
+def _build_status_bar(keys):
+    """Build status bar string from configured keybindings."""
+    parts = []
+    for action, key in keys.items():
+        meta = KEYBINDING_META.get(action)
+        if not meta or not meta[2]:
+            continue
+        display = _to_display_key(key)
+        parts.append(f"{display}:{meta[2]}")
+    return "  " + "  ".join(parts)
+
+
+class HelpScreen(ModalScreen):
+    CSS = HELP_CSS
+    BINDINGS = [
+        ("escape", "dismiss", "Close"),
+    ]
+
+    def __init__(self, shortcut_table, help_key="?"):
+        super().__init__()
+        self._shortcut_table = shortcut_table
+        self._help_key = help_key
+        self._help_key_display = _to_display_key(help_key)
+
+    def on_mount(self):
+        from swl_demod_tool.config import _to_textual_key
+        help_tkey = _to_textual_key(self._help_key)
+        if help_tkey != "escape":
+            self._bindings.bind(help_tkey, "dismiss", description="Close")
+
+    def compose(self):
+        lines = []
+        for section, shortcuts in self._shortcut_table:
+            lines.append(f"[bold #c0a36e]{section}[/]")
+            for key, desc in shortcuts:
+                lines.append(f"  [#769ff0]{key:<22}[/] {desc}")
+            lines.append("")
+        body = "\n".join(lines).rstrip()
+        hint = f"Press Escape or {self._help_key_display} to close"
+
+        with Container(id="help-container"):
+            with Container(id="help-card"):
+                yield Static("Keyboard Shortcuts", id="help-title")
+                yield Static(body, id="help-body")
+                yield Static(hint, id="help-hint")
+
+
 # S-meter thresholds (dB values corresponding to S-units, approximate)
 S_METER_BLOCKS = "▏▎▍▌▋▊▉█"
 
@@ -151,38 +323,39 @@ class DemodApp(App):
     AUTO_FOCUS = None
     theme = "tokyo-night"
     FREQ_LABEL = (
-        "[#769ff0 on #394260]╭─[/]"
         "[#a3aed2]░▒▓[/]"
-        "[#090c0c on #a3aed2]  Freq [/]"
-        "[#a3aed2 on black]\ue0b0[/]"
+        "[#090c0c on #a3aed2] Freq. [/]"
+        "[#a3aed2 on black]\ue0b0 [/]"
     )
     BINDINGS = [
         ("q", "quit", "Quit"),
         ("escape", "unfocus", "Unfocus"),
+        ("question_mark", "show_help", "Help"),
         ("c", "connect", "Connect"),
-        ("d", "disconnect", "Disconnect"),
-        ("r", "reconnect", "Reconnect"),
+        ("d", "disconnect", "Disc"),
+        ("r", "reconnect", "Recon"),
         ("m", "toggle_mute", "Mute"),
         ("a", "toggle_agc", "AGC"),
         ("plus", "volume_up", "Vol+"),
-        ("minus", "volume_down", "Vol-"),
+        ("minus", "volume_down", "Vol\u2212"),
         ("right_square_bracket", "bw_up", "BW+"),
-        ("left_square_bracket", "bw_down", "BW-"),
+        ("left_square_bracket", "bw_down", "BW\u2212"),
         ("shift+right", "zoom_in", "Zoom+"),
-        ("shift+left", "zoom_out", "Zoom-"),
+        ("shift+left", "zoom_out", "Zoom\u2212"),
         ("right", "tune_up", "Tune+"),
-        ("left", "tune_down", "Tune-"),
+        ("left", "tune_down", "Tune\u2212"),
         ("slash", "focus_freq", "Freq"),
         ("x", "cycle_mode", "Mode"),
         ("alt+right", "fine_tune_up", "Fine+"),
-        ("alt+left", "fine_tune_down", "Fine-"),
+        ("alt+left", "fine_tune_down", "Fine\u2212"),
         ("pageup", "rit_up", "RIT+"),
-        ("pagedown", "rit_down", "RIT-"),
+        ("pagedown", "rit_down", "RIT\u2212"),
         ("v", "toggle_vfo", "VFO"),
         ("t", "clear_cw_text", "ClrTxt"),
         ("n", "toggle_nb", "NB"),
         ("N", "cycle_nb_threshold", "NB Thr"),
         ("f", "cycle_dnr", "DNR"),
+        ("alt+n", "toggle_auto_notch", "DNF"),
     ]
 
     utc_display = reactive("--:-- UTC")
@@ -194,7 +367,10 @@ class DemodApp(App):
     tune_step = reactive(1000)  # Fine tune step in Hz
 
     def __init__(self, host="localhost", iq_port=4533, cat_port=4532,
-                 audio_device="default"):
+                 audio_device="default", keybindings=None):
+        self._keybindings = keybindings or {}
+        self._shortcut_table = _build_shortcut_table(self._keybindings)
+        self._status_bar_text = _build_status_bar(self._keybindings)
         super().__init__()
         self.host = host
         self.iq_port = iq_port
@@ -233,12 +409,10 @@ class DemodApp(App):
 
     def compose(self):
         yield Static(id="title-bar")
-        with Horizontal(id="freq-bar"):
-            with Vertical(id="freq-prompt"):
-                yield Static(self.FREQ_LABEL)
-                with Horizontal():
-                    yield Static("[#769ff0 on #394260]╰─\uf10c[/]", classes="prompt-char")
-                    yield Input(placeholder="kHz", id="freq-input")
+        with Container(id="freq-bar-wrap"):
+            with Horizontal(id="freq-bar"):
+                yield Static(self.FREQ_LABEL, classes="freq-label")
+                yield Input(placeholder="kHz", id="freq-input")
         yield Static(id="conn-status")
         yield Static(id="radio-info")
         yield Static(id="spectrum-display")
@@ -246,6 +420,21 @@ class DemodApp(App):
         yield Static(id="mode-info")
         yield Static(id="status-bar", markup=True)
         yield Footer()
+
+    def _apply_keybinding_overrides(self):
+        """Rebind any keys that differ from class-level defaults."""
+        from swl_demod_tool.config import DEFAULT_KEYS, _to_textual_key
+        for action, configured_key in self._keybindings.items():
+            default_key = DEFAULT_KEYS.get(action)
+            if default_key is None or configured_key == default_key:
+                continue
+            default_tkey = _to_textual_key(default_key)
+            new_tkey = _to_textual_key(configured_key)
+            meta = KEYBINDING_META.get(action)
+            desc = (meta[2] or meta[0]) if meta else action
+            # Remove old binding and add new one
+            self._bindings.key_to_bindings.pop(default_tkey, None)
+            self._bindings.bind(new_tkey, action, description=desc)
 
     def on_mount(self):
         try:
@@ -256,6 +445,8 @@ class DemodApp(App):
                 os.close(fd)
         except OSError:
             pass
+        # Apply keybinding overrides from config
+        self._apply_keybinding_overrides()
         self._update_all()
         self.set_interval(1, self._tick)
         self.set_interval(0.1, self._update_displays)
@@ -439,18 +630,21 @@ class DemodApp(App):
         s_bar = "█" * s_filled + "░" * (20 - s_filled)
 
         # Noise reduction status
-        nb_str = f"NB: {'ON':3s} ({self.demod.nb_threshold_name})" if self.demod.nb_enabled else "NB: OFF      "
+        nb_str = f" NB: {'ON':3s} ({self.demod.nb_threshold_name})" if self.demod.nb_enabled else " NB: OFF      "
         dnr_lvl = self.demod.dnr_level
         dnr_str = f"DNR: {dnr_lvl}" if dnr_lvl > 0 else "DNR: OFF"
+        an_str = "DNF: ON" if self.demod.auto_notch else "DNF: OFF"
 
         text = (
-            f"{'    Vol: [' + vol_bar + '] ' + str(vol_pct) + '%' + mute_str:<46s}"
-            f"AGC:  {agc_str} ({agc_gain_db:+.0f} dB)\n"
-            f"{'  Audio: [' + level_bar + '] ' + f'{level_db:.0f} dB':<46s}"
-            f"{'Buf: [' + buf_bar + '] ' + f'{fill_pct:2d}%  Underruns: {underruns}'}\n"
-            f"{'   Peak: [' + peak_bar + '] ' + f'{self.peak_db:.1f} dBFS':<46s}"
-            f"  S: [{s_bar}] {s_unit}\n"
-            f"     {nb_str}    {dnr_str}"
+            f"{'    Vol: [' + vol_bar + '] ' + str(vol_pct) + '%' + mute_str:<44s}"
+            f"{nb_str:<20s}"
+            f"AGC: {agc_str} ({agc_gain_db:+.0f} dB)\n"
+            f"{'  Audio: [' + level_bar + '] ' + f'{level_db:.0f} dB':<44s}"
+            f"{dnr_str:<20s}"
+            f"Buf: [{buf_bar}] {fill_pct:2d}%  Underruns: {underruns}\n"
+            f"{'   Peak: [' + peak_bar + '] ' + f'{self.peak_db:.1f} dBFS':<44s}"
+            f"{an_str:<20s}"
+            f"  S: [{s_bar}] {s_unit}"
         )
         w.update(text)
 
@@ -465,7 +659,7 @@ class DemodApp(App):
         """Format SNR measurement for display."""
         snr = self.demod.get_snr_db()
         if snr > 0.5:
-            return f"SNR: {snr:.0f} dB"
+            return f"SNR: {snr:2.0f} dB"
         return "SNR: -- dB"
 
     def _update_mode_info(self):
@@ -503,11 +697,23 @@ class DemodApp(App):
         st = self.drm.get_status()
 
         # Build styled Text, then derive plain string for change detection
+        sd = st.get("sync_detail", {})
         t = Text("   Sync: ")
-        for c in st["sync"]:
+        for key in ("io", "time", "frame", "fac", "sdc", "msc"):
+            c = sd.get(key, "-")
+            t.append(f"{key}:", style="#888888")
             t.append(c, style=self._SYNC_STYLES.get(c, "#888888"))
+            t.append(" ")
         if st["signal"]:
             t.append(f"  SNR: {st['snr']:.1f} dB    Mode: {st['mode']}")
+            if st.get("sdc_qam") or st.get("msc_qam"):
+                t.append("    Coding: ")
+                if st.get("sdc_qam"):
+                    t.append(f"SDC {st['sdc_qam']}")
+                if st.get("sdc_qam") and st.get("msc_qam"):
+                    t.append(", ")
+                if st.get("msc_qam"):
+                    t.append(f"MSC {st['msc_qam']}")
             if st["label"]:
                 t.append("    Station: ")
                 t.append(st["label"], style="bold yellow")
@@ -534,7 +740,7 @@ class DemodApp(App):
 
     def _update_status(self):
         bar = self.query_one("#status-bar", Static)
-        bar.update("  c:Connect  d:Disc  r:Recon  m:Mute  a:AGC  x:Mode  v:VFO  +/-:Vol  \\[/]:BW  ←/→:Tune  PgU/D:RIT  S-←/→:Zoom  /:Freq  n:NB  f:DNR")
+        bar.update(self._status_bar_text)
 
     # --- IQ data callback (from network thread) ---
 
@@ -711,6 +917,10 @@ class DemodApp(App):
         self.demod.cycle_dnr_level()
         self._update_audio_info()
 
+    def action_toggle_auto_notch(self):
+        self.demod.toggle_auto_notch()
+        self._update_audio_info()
+
     def action_volume_up(self):
         self.demod.volume = min(1.0, self.demod.volume + 0.05)
         self._update_audio_info()
@@ -853,6 +1063,11 @@ class DemodApp(App):
         """Remove focus from any focused widget."""
         self.set_focus(None)
 
+    def action_show_help(self):
+        """Show keyboard shortcuts popup."""
+        help_key = self._keybindings.get("show_help", "?")
+        self.push_screen(HelpScreen(self._shortcut_table, help_key))
+
     def on_unmount(self):
         self.audio.stop()
         self.drm.stop()
@@ -886,9 +1101,10 @@ def main():
     cat_port = args.cat_port or config.getint("server", "cat_port")
     audio_device = args.audio_device or config.get("audio", "device")
     dream_path = config.get("drm", "dream_path", fallback="") or None
+    keybindings = load_keybindings(config)
 
     app = DemodApp(host=host, iq_port=iq_port, cat_port=cat_port,
-                   audio_device=audio_device)
+                   audio_device=audio_device, keybindings=keybindings)
     app.drm.dream_path = app.drm.dream_path or dream_path
     app.run()
 

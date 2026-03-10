@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.3] - 2026-03-10
+
+### Added
+- **DRM detailed sync display**: Sync line now shows individually labeled fields (`io:O time:O frame:O fac:O sdc:O msc:O`) with per-field color coding
+- **DRM constellation info**: SDC and MSC QAM modulation (4-QAM, 16-QAM, 64-QAM) displayed in the info panel when available from Dream
+- **DRM debug logging**: Raw JSON from Dream's status socket logged at debug level for diagnostics
+
 ## [0.4.2] - 2026-03-09
 
 ### Added

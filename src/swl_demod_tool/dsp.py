@@ -105,10 +105,13 @@ _SNR_FFT_SIZE = 1024        # FFT size for in-band SNR measurement
 _CW_BFO_HZ = 700.0
 _CW_FFT_SIZE = 8192
 _CW_PREFILTER_HZ = 2400
-_CW_ENV_ATTACK = 0.04    # ~0.5 ms at 48 kHz
-_CW_ENV_DECAY = 0.002    # ~10 ms at 48 kHz
+_CW_ENV_ATTACK = 0.06    # ~0.35 ms at 48 kHz
+_CW_ENV_DECAY = 0.003    # ~7 ms at 48 kHz
 _CW_PEAK_DECAY = 0.99998 # ~1 s at 48 kHz
-_CW_THRESHOLD_FRAC = 0.4
+_CW_THRESHOLD_UP = 0.4   # Hysteresis: key-down when envelope rises above this fraction of peak
+_CW_THRESHOLD_DN = 0.2   # Hysteresis: key-up when envelope drops below this fraction of peak
+_CW_MIN_EDGE_MS = 8.0    # Ignore transitions shorter than this (anti-chatter debounce)
+_CW_MIN_PEAK = 1e-6      # Minimum envelope peak before trusting key detection
 _CW_TONE_CONCENTRATION = 0.25
 _CW_SNR_SMOOTH = 0.8
 _CW_PEAK_HZ_SMOOTH = 0.85
@@ -137,11 +140,21 @@ _DNR_LEVEL_PRESETS = {
     3: (5.0, 0.03),   # Aggressive: strong gating, deep suppression
 }
 
+# Auto notch constants — detect and null persistent narrow tonal interference
+_AN_FFT_SIZE = 1024
+_AN_HOP = 512               # 50% overlap
+_AN_PEAK_THRESH = 10.0      # Bin must exceed median of neighbors by this factor
+_AN_NEIGHBOR_BINS = 8       # Half-width of neighborhood for local median
+_AN_NOTCH_HALFWIDTH = 2     # Null this many bins on each side of detected peak
+_AN_PERSIST_SMOOTH = 0.85   # Smoothing for persistent tone tracker (higher = slower adapt)
+_AN_GAIN_SMOOTH = 0.6       # Temporal gain smoothing per bin
+_AN_RAMP_FRAMES = 5         # Frames to ramp gain from 1.0 to computed value
+
 
 class Demodulator:
     """AM/SSB/SAM/CW demodulator with decimation, DC removal, AGC, and noise reduction.
 
-    Pipeline: IQ (192 kHz) -> [NB] -> lowpass -> decimate (÷4) -> detect -> [DNR] -> DC remove -> AGC -> audio (48 kHz)
+    Pipeline: IQ (192 kHz) -> [NB] -> lowpass -> decimate (÷4) -> detect -> [DNR] -> [Auto Notch] -> DC remove -> AGC -> audio (48 kHz)
     """
 
     def __init__(self, iq_sample_rate=192000, audio_rate=48000, bandwidth=5000):
@@ -180,6 +193,23 @@ class Demodulator:
         ola_sum[:_DNR_HOP] += self._dnr_window[_DNR_HOP:] ** 2
         ola_sum[_DNR_HOP:] += self._dnr_window[:_DNR_HOP] ** 2
         self._dnr_synth_window /= np.maximum(ola_sum, 1e-10)
+
+        # Auto notch state (detect and null persistent tones)
+        self._an_enabled = False
+        self._an_in_buf = np.zeros(0, dtype=np.float32)
+        self._an_prev_frame = np.zeros(_AN_HOP, dtype=np.float32)
+        an_bins = _AN_FFT_SIZE // 2 + 1
+        self._an_persist = np.zeros(an_bins, dtype=np.float32)  # Persistent tone tracker
+        self._an_prev_gain = np.ones(an_bins, dtype=np.float32)
+        self._an_frame_count = 0
+        self._an_window = np.hanning(_AN_FFT_SIZE).astype(np.float32)
+        self._an_synth_window = self._an_window.copy()
+        an_ola_sum = np.zeros(_AN_FFT_SIZE, dtype=np.float32)
+        an_ola_sum[:_AN_HOP] += self._an_window[:_AN_HOP] ** 2
+        an_ola_sum[_AN_HOP:] += self._an_window[_AN_HOP:] ** 2
+        an_ola_sum[:_AN_HOP] += self._an_window[_AN_HOP:] ** 2
+        an_ola_sum[_AN_HOP:] += self._an_window[:_AN_HOP] ** 2
+        self._an_synth_window /= np.maximum(an_ola_sum, 1e-10)
 
         # SNR estimator state
         self._snr_db = 0.0
@@ -234,6 +264,9 @@ class Demodulator:
         self._cw_decoded_text = ""
         self._cw_last_keyup_sample = 0
         self._cw_dit_ms = 0.0
+        # Pending edges buffer: stores (element_dur_ms, gap_before_ms) tuples
+        # collected before _cw_dit_ms is established, replayed once WPM locks
+        self._cw_pending_edges = []
 
     def _update_cw_filter(self):
         """Rebuild the post-decimation audio-rate lowpass for CW modes."""
@@ -447,6 +480,91 @@ class Demodulator:
             return np.concatenate(output_pieces)
         return np.array([], dtype=np.float32)
 
+    def _apply_auto_notch(self, audio):
+        """Auto notch filter — detect and null persistent narrow tonal interference.
+
+        Uses STFT to find bins whose power significantly exceeds their local
+        neighborhood median.  Persistent peaks (tracked across frames) are
+        nulled with a narrow notch.
+        """
+        fft_size = _AN_FFT_SIZE
+        hop = _AN_HOP
+
+        self._an_in_buf = np.concatenate((self._an_in_buf, audio))
+        output_pieces = []
+
+        while len(self._an_in_buf) >= fft_size:
+            frame = self._an_in_buf[:fft_size]
+            self._an_in_buf = self._an_in_buf[hop:]
+
+            spectrum = np.fft.rfft(frame * self._an_window)
+            power = np.abs(spectrum) ** 2
+            n_bins = len(power)
+
+            self._an_frame_count += 1
+
+            # Detect peaks: compare each bin to local median of neighbors
+            gain = np.ones(n_bins, dtype=np.float32)
+            for b in range(1, n_bins - 1):  # skip DC and Nyquist
+                lo = max(1, b - _AN_NEIGHBOR_BINS)
+                hi = min(n_bins - 1, b + _AN_NEIGHBOR_BINS + 1)
+                # Exclude the center notch region from the median calculation
+                notch_lo = max(1, b - _AN_NOTCH_HALFWIDTH)
+                notch_hi = min(n_bins - 1, b + _AN_NOTCH_HALFWIDTH + 1)
+                neighbors = np.concatenate((power[lo:notch_lo], power[notch_hi:hi]))
+                if len(neighbors) == 0:
+                    continue
+                local_med = np.median(neighbors)
+                if local_med > 0 and power[b] > local_med * _AN_PEAK_THRESH:
+                    # This bin is a tonal peak — mark for notching
+                    gain[b] = 0.0
+
+            # Expand notch to halfwidth around detected peaks
+            notch_mask = gain == 0.0
+            expanded_gain = gain.copy()
+            for b in np.where(notch_mask)[0]:
+                lo = max(1, b - _AN_NOTCH_HALFWIDTH)
+                hi = min(n_bins, b + _AN_NOTCH_HALFWIDTH + 1)
+                expanded_gain[lo:hi] = 0.0
+
+            # Track persistent tones: smooth detection across frames
+            self._an_persist = (
+                _AN_PERSIST_SMOOTH * self._an_persist
+                + (1 - _AN_PERSIST_SMOOTH) * (1.0 - expanded_gain)
+            )
+
+            # Apply notch only where persistence exceeds threshold
+            notch_gain = np.where(self._an_persist > 0.3, 0.01, 1.0).astype(np.float32)
+            # Always pass DC
+            notch_gain[0] = 1.0
+
+            # Temporal smoothing
+            notch_gain = (
+                _AN_GAIN_SMOOTH * self._an_prev_gain
+                + (1 - _AN_GAIN_SMOOTH) * notch_gain
+            )
+            self._an_prev_gain = notch_gain.copy()
+
+            # Ramp during initial frames
+            if self._an_frame_count <= _AN_RAMP_FRAMES:
+                ramp = self._an_frame_count / _AN_RAMP_FRAMES
+                notch_gain = 1.0 - ramp * (1.0 - notch_gain)
+
+            # Apply and synthesize
+            filtered = spectrum * notch_gain
+            out_frame = (
+                np.fft.irfft(filtered, n=fft_size) * self._an_synth_window
+            ).astype(np.float32)
+
+            # Overlap-add
+            out_frame[:hop] += self._an_prev_frame
+            self._an_prev_frame = out_frame[hop:].copy()
+            output_pieces.append(out_frame[:hop])
+
+        if output_pieces:
+            return np.concatenate(output_pieces)
+        return np.array([], dtype=np.float32)
+
     def process(self, iq_samples):
         """Demodulate AM/SSB from complex IQ samples.
 
@@ -491,6 +609,14 @@ class Demodulator:
             dnr_level = self._dnr_level
         if dnr_level > 0:
             detected = self._apply_dnr(detected)
+            if len(detected) == 0:
+                return np.array([], dtype=np.float32)
+
+        # Auto notch (post-detection, after DNR)
+        with self._lock:
+            an_on = self._an_enabled
+        if an_on:
+            detected = self._apply_auto_notch(detected)
             if len(detected) == 0:
                 return np.array([], dtype=np.float32)
 
@@ -660,6 +786,21 @@ class Demodulator:
         with self._lock:
             self._dnr_level = (self._dnr_level + 1) % 4
 
+    @property
+    def auto_notch(self):
+        with self._lock:
+            return self._an_enabled
+
+    @auto_notch.setter
+    def auto_notch(self, value):
+        with self._lock:
+            self._an_enabled = value
+
+    def toggle_auto_notch(self):
+        """Toggle auto notch on/off."""
+        with self._lock:
+            self._an_enabled = not self._an_enabled
+
     def get_snr_db(self):
         """Return estimated in-band SNR in dB."""
         return self._snr_db
@@ -669,13 +810,19 @@ class Demodulator:
         return self._bfo_offset
 
     def _cw_measure_speed(self, audio):
-        """Detect CW keying envelope, estimate speed, and decode Morse."""
+        """Detect CW keying envelope, estimate speed, and decode Morse.
+
+        Uses rectified magnitude with hysteresis thresholds to prevent
+        chatter on noisy signals, and a minimum edge duration debounce
+        to reject noise glitches.
+        """
         abs_audio = np.abs(audio)
         env = self._cw_env
         env_peak = self._cw_env_peak
         key_down = self._cw_key_down
         edge_sample = self._cw_edge_sample
         base_count = self._cw_sample_count
+        min_edge_samples = int(_CW_MIN_EDGE_MS * self.audio_rate / 1000.0)
 
         for i in range(len(abs_audio)):
             s = abs_audio[i]
@@ -687,32 +834,56 @@ class Demodulator:
                 env_peak = env
             else:
                 env_peak *= _CW_PEAK_DECAY
-            threshold = env_peak * _CW_THRESHOLD_FRAC
-            key_now = env > threshold and env_peak > 1e-8
+
             sample_pos = base_count + i
+
+            # Hysteresis: use higher threshold to go key-down, lower to go key-up
+            # Require env_peak above minimum to reject noise-only false triggers
+            if key_down:
+                key_now = env > env_peak * _CW_THRESHOLD_DN and env_peak > _CW_MIN_PEAK
+            else:
+                key_now = env > env_peak * _CW_THRESHOLD_UP and env_peak > _CW_MIN_PEAK
+
+            # Debounce: reject transitions shorter than minimum edge duration
+            if key_down != key_now:
+                edge_dur = sample_pos - edge_sample
+                if edge_dur < min_edge_samples:
+                    continue  # too short — ignore this transition
 
             if key_down and not key_now:
                 dur_ms = (sample_pos - edge_sample) * 1000.0 / self.audio_rate
                 if 15 < dur_ms < 2000:
+                    # Compute gap since last key-up (for character boundary detection)
+                    gap_ms = 0.0
+                    if self._cw_last_keyup_sample > 0:
+                        gap_ms = (edge_sample - self._cw_last_keyup_sample) * 1000.0 / self.audio_rate
+
                     self._cw_element_ms.append(dur_ms)
                     if len(self._cw_element_ms) > 60:
                         self._cw_element_ms = self._cw_element_ms[-60:]
                     self._cw_update_wpm()
+
                     if self._cw_dit_ms > 0:
+                        # Replay any pending edges first
+                        if self._cw_pending_edges:
+                            self._cw_replay_pending()
+                        # Check gap for character/word boundary
+                        if gap_ms > self._cw_dit_ms * 4.0 and self._cw_current_char:
+                            self._cw_decode_char()
+                            self._cw_append_text(" ")
+                        elif gap_ms > self._cw_dit_ms * 2.0 and self._cw_current_char:
+                            self._cw_decode_char()
+                        # Classify current element
                         if dur_ms < self._cw_dit_ms * 2.0:
                             self._cw_current_char.append(".")
                         else:
                             self._cw_current_char.append("-")
+                    else:
+                        # Buffer edge until dit_ms is established
+                        self._cw_pending_edges.append((dur_ms, gap_ms))
                 self._cw_last_keyup_sample = sample_pos
                 edge_sample = sample_pos
             elif not key_down and key_now:
-                if self._cw_dit_ms > 0 and self._cw_last_keyup_sample > 0:
-                    off_ms = (sample_pos - self._cw_last_keyup_sample) * 1000.0 / self.audio_rate
-                    if off_ms > self._cw_dit_ms * 5.0 and self._cw_current_char:
-                        self._cw_decode_char()
-                        self._cw_append_text(" ")
-                    elif off_ms > self._cw_dit_ms * 2.5 and self._cw_current_char:
-                        self._cw_decode_char()
                 edge_sample = sample_pos
             key_down = key_now
 
@@ -726,9 +897,26 @@ class Demodulator:
         if (not self._cw_key_down and self._cw_dit_ms > 0
                 and self._cw_current_char and self._cw_last_keyup_sample > 0):
             silence_ms = (self._cw_sample_count - self._cw_last_keyup_sample) * 1000.0 / self.audio_rate
-            if silence_ms > self._cw_dit_ms * 5.0:
+            if silence_ms > self._cw_dit_ms * 4.0:
                 self._cw_decode_char()
                 self._cw_append_text(" ")
+
+    def _cw_replay_pending(self):
+        """Replay buffered edges now that _cw_dit_ms is established."""
+        pending = self._cw_pending_edges
+        self._cw_pending_edges = []
+        for dur_ms, gap_ms in pending:
+            # Check gap for character/word boundary
+            if gap_ms > self._cw_dit_ms * 4.0 and self._cw_current_char:
+                self._cw_decode_char()
+                self._cw_append_text(" ")
+            elif gap_ms > self._cw_dit_ms * 2.0 and self._cw_current_char:
+                self._cw_decode_char()
+            # Classify element
+            if dur_ms < self._cw_dit_ms * 2.0:
+                self._cw_current_char.append(".")
+            else:
+                self._cw_current_char.append("-")
 
     def _cw_update_wpm(self):
         """Estimate WPM from collected element durations."""
@@ -790,6 +978,7 @@ class Demodulator:
             self._cw_wpm = 0.0
             self._cw_element_ms = []
             self._cw_dit_ms = 0.0
+            self._cw_pending_edges = []
 
     def get_cw_peak_hz(self):
         """Return the smoothed peak audio frequency in CW mode."""
@@ -862,6 +1051,13 @@ class Demodulator:
         self._dnr_noise_floor = 0.0
         self._dnr_prev_gain = np.ones(n_bins, dtype=np.float32)
         self._dnr_frame_count = 0
+        # Reset auto notch
+        an_bins = _AN_FFT_SIZE // 2 + 1
+        self._an_in_buf = np.zeros(0, dtype=np.float32)
+        self._an_prev_frame = np.zeros(_AN_HOP, dtype=np.float32)
+        self._an_persist = np.zeros(an_bins, dtype=np.float32)
+        self._an_prev_gain = np.ones(an_bins, dtype=np.float32)
+        self._an_frame_count = 0
         self._dc_avg = 0.0
         self._agc_gain = _AGC_INITIAL_GAIN
         self._pll_phase = 0.0
@@ -884,6 +1080,7 @@ class Demodulator:
         self._cw_current_char = []
         self._cw_last_keyup_sample = 0
         self._cw_dit_ms = 0.0
+        self._cw_pending_edges = []
         if self._cw_taps is not None:
             self._cw_taps, self._cw_zi_i = _make_filter(255, self.bandwidth, self.audio_rate)
             _, self._cw_zi_q = _make_filter(255, self.bandwidth, self.audio_rate)

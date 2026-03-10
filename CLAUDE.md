@@ -51,7 +51,7 @@ Multiple threads cooperate: main Textual event loop, IQ receive daemon thread (`
 The DRM mode uses the [Dream](http://drm.sourceforge.net) 2.2 open-source DRM decoder. Dream is spawned as a subprocess following the same approach as [openwebrx](https://github.com/jketterl/openwebrx):
 - IQ data is piped to Dream's stdin as raw int16 interleaved stereo
 - Decoded audio is read from Dream's stdout as raw int16 stereo
-- Status (sync, SNR, service label, text, bitrate, mode) is read from a Unix domain socket (`--status-socket`) as JSON
+- Status (sync detail per field, SNR, SDC/MSC QAM constellation, service label, text, bitrate, audio codec, mode) is read from a Unix domain socket (`--status-socket`) as JSON
 - Dream binary is auto-detected from `../DRM/` or `PATH`, or configured via `config.conf`
 
 ## Related Documentation
@@ -59,3 +59,4 @@ The DRM mode uses the [Dream](http://drm.sourceforge.net) 2.2 open-source DRM de
 - `USER_GUIDE.md` — Installation, usage, keybindings, configuration
 - `DEV_GUIDE.md` — Architecture details, protocols, DSP pipeline, constants
 - `CHANGELOG.md` — Version history
+- `TECHNOTES.md` — Technical notes (buffer underruns, etc.)

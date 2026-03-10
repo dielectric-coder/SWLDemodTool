@@ -30,6 +30,7 @@ _DEFAULT_DREAM_PATH = os.path.normpath(
 
 _ROBUSTNESS_MODES = {0: "A", 1: "B", 2: "C", 3: "D"}
 _SYNC_KEYS = ("io", "time", "frame", "fac", "sdc", "msc")
+_QAM_MODES = {0: "4-QAM", 1: "16-QAM", 2: "64-QAM"}
 
 # Maximum bytes to buffer when waiting for a newline in status socket
 _MAX_STATUS_BUF = 65536
@@ -48,6 +49,10 @@ def _default_status():
         "country": "",
         "language": "",
         "audio_mode": "",
+        "sync_detail": {"io": "-", "time": "-", "frame": "-",
+                        "fac": "-", "sdc": "-", "msc": "-"},
+        "sdc_qam": "",
+        "msc_qam": "",
     }
 
 
@@ -300,16 +305,22 @@ class DRMDecoder:
         except (json.JSONDecodeError, ValueError):
             return
 
+        log.debug("Dream raw JSON: %s", raw.strip())
+
         st = data.get("status", {})
         sync_chars = []
+        sync_detail = {}
         for key in _SYNC_KEYS:
             val = st.get(key, -1)
             if val == 0:
                 sync_chars.append("O")
+                sync_detail[key] = "O"
             elif val in (1, 2):
                 sync_chars.append("*")
+                sync_detail[key] = "*"
             else:
                 sync_chars.append("-")
+                sync_detail[key] = "-"
         sync = "".join(sync_chars)
 
         signal_info = data.get("signal", {})
@@ -318,6 +329,8 @@ class DRMDecoder:
 
         mode_info = data.get("mode", {})
         mode = _ROBUSTNESS_MODES.get(mode_info.get("robustness", -1), "?")
+        sdc_qam = _QAM_MODES.get(mode_info.get("sdc_qam"), "")
+        msc_qam = _QAM_MODES.get(mode_info.get("msc_qam"), "")
 
         # Extract service info — prefer first audio service, fall back to first service
         label = text = audio_mode = country = language = ""
@@ -344,6 +357,9 @@ class DRMDecoder:
             self.status["country"] = country
             self.status["language"] = language
             self.status["audio_mode"] = audio_mode
+            self.status["sync_detail"] = sync_detail
+            self.status["sdc_qam"] = sdc_qam
+            self.status["msc_qam"] = msc_qam
 
     def _drain_stderr(self):
         """Drain stderr to prevent pipe blocking."""

@@ -95,11 +95,12 @@ A dedicated panel below the audio info displays mode-specific indicators:
 
 **CW modes (CW+/CW-):** Tuning indicator (center-zero bar, ±150 Hz range), tone SNR, estimated speed in WPM, RIT offset, and live decoded Morse text. Press `t` to clear the text buffer. When no tone is detected, readings hold for ~1 second before blanking.
 
-**DRM mode:** Sync status, SNR, robustness mode, station label, bitrate, audio mode, country, language, and text messages. The sync indicators show six status fields (IO, Time, Frame, FAC, SDC, MSC):
-- Green `O` = OK
-- Red `X` = CRC error
-- Yellow `*` = data error
-- Dim `-` = not present
+**DRM mode:** Sync status with labeled fields, SNR, robustness mode, SDC/MSC constellation (QAM), station label, bitrate, audio codec, country, language, and text messages. The sync line shows six individually labeled fields:
+- `io:` `time:` `frame:` `fac:` `sdc:` `msc:` — each with a colored status indicator:
+  - Green `O` = OK
+  - Yellow `*` = data error
+  - Dim `-` = not present
+- Coding info shows the SDC and MSC QAM constellation (e.g., `SDC 16-QAM, MSC 64-QAM`) when available from the Dream decoder
 
 **SAM modes:** PLL tracking offset in Hz.
 
