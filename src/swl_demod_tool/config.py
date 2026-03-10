@@ -54,6 +54,7 @@ DEFAULT_KEYS = {
     "cycle_nb_threshold": "N",
     "cycle_dnr": "f",
     "toggle_auto_notch": "alt+n",
+    "toggle_spectrum": "s",
 }
 
 # Human-readable key <-> Textual internal key name

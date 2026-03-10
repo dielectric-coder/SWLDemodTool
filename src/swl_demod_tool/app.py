@@ -3,8 +3,11 @@
 """SWL Demod Tool - TUI demodulator for Elad FDM-DUO IQ stream."""
 
 import argparse
+import errno
 import logging
 import os
+import stat
+import subprocess
 import threading
 import numpy as np
 from collections import deque
@@ -28,6 +31,7 @@ from swl_demod_tool.audio import AudioOutput
 from swl_demod_tool.drm import DRMDecoder
 
 SPECTRUM_AVG = 3
+SPECTRUM_FIFO = "/tmp/swl-spectrum.fifo"
 FFT_SIZE = 4096
 
 
@@ -197,6 +201,7 @@ KEYBINDING_META = {
     "cycle_nb_threshold":("Cycle NB threshold",          "Noise Reduction", "NB Thr"),
     "cycle_dnr":         ("Cycle spectral DNR level",    "Noise Reduction", "DNR"),
     "toggle_auto_notch": ("Toggle auto notch filter",    "Noise Reduction", "DNF"),
+    "toggle_spectrum":   ("Toggle spectrum display",     "Display",         "Spec"),
 }
 
 # Pairs of (down_action, up_action) shown as a single "key1 / key2" help entry
@@ -356,6 +361,7 @@ class DemodApp(App):
         ("N", "cycle_nb_threshold", "NB Thr"),
         ("f", "cycle_dnr", "DNR"),
         ("alt+n", "toggle_auto_notch", "DNF"),
+        ("s", "toggle_spectrum", "Spec"),
     ]
 
     utc_display = reactive("--:-- UTC")
@@ -406,6 +412,10 @@ class DemodApp(App):
 
         # Guard against concurrent CAT polls
         self._cat_polling = False
+
+        # Spectrum display subprocess
+        self._spectrum_proc = None
+        self._spectrum_fifo_fd = -1
 
     def compose(self):
         yield Static(id="title-bar")
@@ -812,6 +822,7 @@ class DemodApp(App):
     def _apply_cat_update(self, freq):
         self.frequency_hz = freq
         self._update_radio_info()
+        self._spectrum_update()
 
     # --- Actions ---
 
@@ -900,6 +911,7 @@ class DemodApp(App):
         if new_mode in defaults:
             self.demod.set_bandwidth(defaults[new_mode])
         self._update_radio_info()
+        self._spectrum_update()
 
     def action_clear_cw_text(self):
         """Clear the decoded CW text buffer."""
@@ -920,6 +932,80 @@ class DemodApp(App):
     def action_toggle_auto_notch(self):
         self.demod.toggle_auto_notch()
         self._update_audio_info()
+
+    # --- Spectrum display (swl-spectrum) ---
+
+    def _spectrum_fifo_send(self, msg):
+        """Send a message to the spectrum FIFO. Returns True on success."""
+        try:
+            if self._spectrum_fifo_fd < 0:
+                self._spectrum_fifo_fd = os.open(
+                    SPECTRUM_FIFO, os.O_WRONLY | os.O_NONBLOCK)
+            os.write(self._spectrum_fifo_fd, msg.encode())
+            return True
+        except OSError:
+            # FIFO not open or broken — close and reset
+            if self._spectrum_fifo_fd >= 0:
+                try:
+                    os.close(self._spectrum_fifo_fd)
+                except OSError:
+                    pass
+                self._spectrum_fifo_fd = -1
+            return False
+
+    def _spectrum_update(self):
+        """Push current freq/mode/bw to swl-spectrum via FIFO."""
+        if self._spectrum_proc is None or self._spectrum_proc.poll() is not None:
+            return
+        if self.frequency_hz > 0:
+            self._spectrum_fifo_send(f"FREQ:{self.frequency_hz}\n")
+        mode = self.demod.mode
+        if mode:
+            self._spectrum_fifo_send(f"MODE:{mode}\n")
+        bw = self.demod.bandwidth
+        if bw > 0:
+            self._spectrum_fifo_send(f"BW:{bw}\n")
+
+    def action_toggle_spectrum(self):
+        """Launch or kill the swl-spectrum display."""
+        # If running, kill it
+        if self._spectrum_proc is not None and self._spectrum_proc.poll() is None:
+            self._spectrum_proc.terminate()
+            self._spectrum_proc = None
+            if self._spectrum_fifo_fd >= 0:
+                try:
+                    os.close(self._spectrum_fifo_fd)
+                except OSError:
+                    pass
+                self._spectrum_fifo_fd = -1
+            return
+
+        # Create FIFO if needed
+        try:
+            os.mkfifo(SPECTRUM_FIFO)
+        except FileExistsError:
+            # Ensure it's actually a FIFO
+            if not stat.S_ISFIFO(os.stat(SPECTRUM_FIFO).st_mode):
+                os.unlink(SPECTRUM_FIFO)
+                os.mkfifo(SPECTRUM_FIFO)
+
+        # Build command: swl-spectrum <host> <iq_port> [-f freq] [-m mode] [-b bw]
+        cmd = ["swl-spectrum", self.host, str(self.iq_port)]
+        if self.frequency_hz > 0:
+            cmd += ["-f", str(self.frequency_hz)]
+        mode = self.demod.mode
+        if mode:
+            cmd += ["-m", mode]
+        bw = self.demod.bandwidth
+        if bw > 0:
+            cmd += ["-b", str(bw)]
+
+        try:
+            self._spectrum_proc = subprocess.Popen(
+                cmd, stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except FileNotFoundError:
+            self.notify("swl-spectrum not found in PATH", severity="error")
 
     def action_volume_up(self):
         self.demod.volume = min(1.0, self.demod.volume + 0.05)
@@ -944,12 +1030,14 @@ class DemodApp(App):
         bw_min, bw_max, step = self._bw_limits()
         self.demod.set_bandwidth(min(bw_max, self.demod.bandwidth + step))
         self._update_radio_info()
+        self._spectrum_update()
 
     def action_bw_down(self):
         """Decrease demodulation bandwidth."""
         bw_min, bw_max, step = self._bw_limits()
         self.demod.set_bandwidth(max(bw_min, self.demod.bandwidth - step))
         self._update_radio_info()
+        self._spectrum_update()
 
     def action_zoom_in(self):
         """Zoom into the spectrum (halve visible span)."""
@@ -1035,6 +1123,7 @@ class DemodApp(App):
     def _apply_tune(self, freq_hz):
         self.frequency_hz = freq_hz
         self._update_radio_info()
+        self._spectrum_update()
 
     def on_input_submitted(self, event):
         """Handle frequency input submission — tunes the active VFO."""
@@ -1073,6 +1162,14 @@ class DemodApp(App):
         self.drm.stop()
         self.iq_client.disconnect()
         self.cat_client.disconnect()
+        # Clean up spectrum display
+        if self._spectrum_fifo_fd >= 0:
+            try:
+                os.close(self._spectrum_fifo_fd)
+            except OSError:
+                pass
+        if self._spectrum_proc is not None and self._spectrum_proc.poll() is None:
+            self._spectrum_proc.terminate()
 
 
 def main():
