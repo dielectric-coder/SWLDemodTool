@@ -1,15 +1,24 @@
 # SWL Demod Tool - User Guide
 
-TUI demodulator for the Elad FDM-DUO software-defined radio.
+Demodulator for the Elad FDM-DUO software-defined radio. Available as a Python TUI and a native C/GTK4 GUI (HFDemodGTK).
 
 ## Prerequisites
 
 - An Elad FDM-DUO with IQ and CAT TCP servers running (e.g., via [EladSpectrum](https://github.com/mikewam/EladSpectrum))
-- Python 3.10+
 - A working audio output device
 - For DRM mode: the [Dream](http://drm.sourceforge.net) DRM decoder binary
 
+### Python TUI Prerequisites
+- Python 3.10+
+
+### HFDemodGTK Prerequisites
+- GTK4, libepoxy, FFTW3 (float), PulseAudio
+- CMake 3.16+, C11 compiler
+- Optional: MesloLGS NF font (for Unicode block character bars)
+
 ## Installation
+
+### Python TUI
 
 ```bash
 pip install swl-demod-tool
@@ -23,17 +32,42 @@ cd SWLDemodTool
 pip install -e .
 ```
 
+### HFDemodGTK (C/GTK4)
+
+```bash
+git clone https://github.com/dielectric-coder/SWLDemodTool.git
+cd SWLDemodTool/HFDemodGTK
+mkdir -p build && cd build
+cmake .. && make
+```
+
 ### DRM Support
 
-DRM decoding requires the Dream 2.2 binary. Build it from source or install from your package manager. The app looks for it at `../DRM/dream-2.2/dream` (relative to the project) or in your `PATH`. You can also set the path in the config file.
+DRM decoding requires the Dream 2.2 binary. Build it from source or install from your package manager.
+
+- **Python TUI**: looks for Dream at `../DRM/dream-2.2/dream` (relative to the project) or in `PATH`
+- **HFDemodGTK**: looks for Dream relative to the executable (up to 3 directory levels), then in `PATH`
+
+You can also set the path in the config file.
 
 ## Running
+
+### Python TUI
 
 ```bash
 swl-demod
 ```
 
 The app auto-connects on startup to `localhost:4533` (IQ) and `localhost:4532` (CAT).
+
+### HFDemodGTK
+
+```bash
+./hfdemod-gtk
+./hfdemod-gtk --host 192.168.1.10
+```
+
+Connect via the HOST input bar at the top of the UI, or use the `--host` CLI flag.
 
 ### Command-Line Options
 
@@ -46,7 +80,7 @@ The app auto-connects on startup to `localhost:4533` (IQ) and `localhost:4532` (
 | `--version`      | Show version and exit              |                |
 | `--debug`        | Enable debug logging to `swl-demod.log` |           |
 
-## Keyboard Controls
+## Keyboard Controls (Python TUI)
 
 | Key             | Action                              |
 |-----------------|-------------------------------------|
@@ -73,7 +107,19 @@ The app auto-connects on startup to `localhost:4533` (IQ) and `localhost:4532` (
 | `q`             | Quit                                |
 | `Escape`        | Unfocus text input                  |
 
+### Keyboard Controls (HFDemodGTK)
+
+| Key             | Action                              |
+|-----------------|-------------------------------------|
+| `q`             | Quit                                |
+| `Escape`        | Unfocus text entry                  |
+| `N` (Shift+N)   | Cycle NB threshold (Off → Low → Med → High) |
+
+Mode selection, controls, tuning, volume, and connect/disconnect are operated via the GTK button bar and input fields.
+
 ## Display Layout
+
+### Python TUI
 
 ```
   SWL Demod Tool v0.4.0     12:34:56 UTC
@@ -89,6 +135,23 @@ The app auto-connects on startup to `localhost:4533` (IQ) and `localhost:4532` (
      NB: ON (Med)    DNR: 2
    Tune: [░░░░░░░░░░█░░░░░░░░░░] +  3.1 Hz    SNR: 18 dB    22 WPM    RIT:  +30 Hz
 ```
+
+### HFDemodGTK Layout
+
+The GTK4 GUI uses a vertical layout with:
+- **HUD title** centered at the top of the GL area
+- **HOST bar** — server host, IQ port, CAT port, Connect/Disconnect buttons
+- **VFO bar** — frequency, mode, bandwidth display
+- **TUNE bar** — tune up/down, fine up/down, direct frequency entry
+- **OpenGL area** — spectrum (top) and waterfall (bottom) with adjustable split
+- **MODE bar** — AM, SAM, SAM-U, SAM-L, USB, LSB, CW+, CW-, RTTY, PSK31, DRM buttons (center-justified, uniform width)
+- **CTRL bar** — Mute, AGC, NB, DNR, Notch, Peak, APF, VFO, Volume slider (center-justified)
+- **Status lines** — Vol/NB/AGC, Audio/DNR/Buf/Underruns, Peak/DNF/APF/S-meter/SNR (column-aligned)
+- **Mode info** — per-mode display (PLL offset, CW tuning bar, RTTY/PSK31 params, DRM status)
+- **Decoded text** — live decoded text for CW/RTTY/PSK31 modes
+- **DRM status** — sync detail, SNR, robustness, SDC/MSC QAM, codec, service label, text
+
+Font: MesloLGS NF with monospace fallback. Unicode block characters (▏▎▍▌▋▊▉█) for bars when available, ASCII `#` fallback.
 
 ### Mode Info Panel
 

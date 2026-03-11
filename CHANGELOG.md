@@ -1,5 +1,31 @@
 # Changelog
 
+## HFDemodGTK [0.1.0] - 2026-03-11
+
+### Added
+- **Native C/GTK4 port** of SWL Demod Tool with OpenGL spectrum and waterfall display
+- Full demodulation pipeline in C: AM, SAM, SAM-U, SAM-L, USB, LSB, CW+, CW-, RTTY, PSK31, DRM
+- OpenGL spectrum display with Blackman-windowed FFT, peak hold, and zoom
+- OpenGL waterfall (scrolling spectrogram) with turbo colormap
+- **DRM decoder integration** via Dream 2.2 subprocess with FIR decimation (192→48 kHz), stdin/stdout pipes, JSON status via Unix domain socket
+- Dream binary auto-detection relative to executable via `/proc/self/exe` (searches up to 3 directory levels)
+- **Noise Blanker (NB)**: Impulse noise suppression at full IQ rate with 3 threshold presets (Low/Med/High), cycle with Shift+N
+- **Spectral DNR**: STFT-based spectral gate (512-point, 50% overlap) with percentile noise floor estimation, 3 levels
+- **Auto Notch**: STFT-based tone detection and removal
+- **SNR estimator**: In-band signal-to-noise ratio from decimated IQ
+- **CW Audio Peak Filter (APF)**: Biquad bandpass (Q=15) centered on 700 Hz BFO
+- **CW Morse decoder** with visual tuning bar, tone SNR, WPM estimation
+- **RTTY decoder**: FSK mark/space (2125/2295 Hz), 45.45 baud Baudot with FIGS/LTRS
+- **PSK31 decoder**: BPSK 31.25 baud with Varicode
+- Per-mode info display: PLL offset (SAM), tuning bar (CW), baud/shift (RTTY/PSK31), SNR (all modes)
+- DRM status display: sync detail per field, SNR, robustness, SDC/MSC QAM, audio codec, service label, text, bitrate, country, language
+- PulseAudio audio output with ring buffer
+- GTK4 CSS-styled UI with MesloLGS NF font support (Unicode block character bars with ASCII fallback)
+- Keyboard shortcuts: q (quit), Esc (unfocus), Shift+N (cycle NB), mode/ctrl buttons
+- `--host` CLI flag for server address
+- INI config file support
+- CMake build system (C11, GTK4, libepoxy, FFTW3f, PulseAudio)
+
 ## [0.4.4] - 2026-03-10
 
 ### Added

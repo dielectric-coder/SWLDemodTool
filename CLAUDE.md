@@ -4,26 +4,45 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-SWL Demod Tool — TUI demodulator for the Elad FDM-DUO software-defined radio. Connects to an IQ sample server and CAT control server over TCP, demodulates AM/SSB/CW/RTTY/PSK31/DRM audio, and displays a live spectrum in the terminal using Textual.
+SWL Demod Tool — demodulator for the Elad FDM-DUO software-defined radio. Two frontends:
+
+1. **Python TUI** (`src/swl_demod_tool/`) — Terminal UI using Textual
+2. **C/GTK4 GUI** (`HFDemodGTK/`) — Native GTK4 application with OpenGL spectrum/waterfall display
+
+Both connect to an IQ sample server and CAT control server over TCP, demodulate AM/SSB/CW/RTTY/PSK31/DRM audio, and display a live spectrum.
 
 ## Commands
 
 ```bash
-# Install in dev mode
+# Python TUI — Install in dev mode
 pip install -e .
 
-# Run the app
+# Python TUI — Run
 swl-demod
 swl-demod --host 192.168.1.10 --iq-port 4533 --cat-port 4532 --audio-device default
+
+# HFDemodGTK — Build
+cd HFDemodGTK && mkdir -p build && cd build
+cmake .. && make
+
+# HFDemodGTK — Run
+./hfdemod-gtk
+./hfdemod-gtk --host 192.168.1.10
 
 # No tests exist yet. No linter is configured.
 ```
 
 ## Architecture
 
+### Python TUI
+
 Real-time data pipeline: **IQ network stream -> DSP -> audio output**, with a Textual TUI for display and control.
 
-### Module Responsibilities
+### HFDemodGTK (C/GTK4)
+
+Same real-time pipeline reimplemented in C: **IQ network stream -> DSP -> audio output**, with a GTK4 GUI using GtkGLArea for OpenGL spectrum and waterfall rendering.
+
+### Module Responsibilities (Python TUI)
 
 - **`app.py`** — Textual `App` subclass (`DemodApp`). TUI layout, keybindings, periodic UI refresh (1s tick + 100ms display update), coordinates all components. Entry point is `main()`.
 - **`iq_client.py`** — TCP client for the Elad Spectrum IQ server. Reads a 16-byte `ELAD` magic header (sample rate, bit depth), then streams 12288-byte chunks of 32-bit signed int IQ pairs, converting to normalized `complex64`. Daemon thread with callback delivery.
@@ -33,9 +52,30 @@ Real-time data pipeline: **IQ network stream -> DSP -> audio output**, with a Te
 - **`audio.py`** — `sounddevice` OutputStream with manual ring buffer. Handles underruns with silence.
 - **`config.py`** — INI config via `configparser` at `$XDG_CONFIG_HOME/swl-demod-tool/config.conf`.
 
-### Threading Model
+### Module Responsibilities (HFDemodGTK)
+
+- **`main.c`** — GTK4 application setup, UI layout (CSS-styled labels, buttons, GL area), keyboard handler, CLI flag parsing, timer-driven display updates. Coordinates all components.
+- **`app_state.h`** — Central `AppState` struct holding all GTK widgets, rendering state, network clients, DSP, audio, and DRM decoder.
+- **`renderer.c/h`** — OpenGL rendering setup for the GtkGLArea (shader compilation, VAO/VBO management).
+- **`spectrum.c/h`** — OpenGL spectrum display with Blackman-windowed FFT, peak hold, and configurable zoom.
+- **`waterfall.c/h`** — OpenGL waterfall (scrolling spectrogram) display with turbo colormap.
+- **`fft.c/h`** — FFTW3-based FFT computation (4096-point, float precision).
+- **`iq_client.c/h`** — TCP client for IQ stream. Same ELAD protocol, pthread-based receive loop with callback.
+- **`cat_client.c/h`** — TCP client for CAT control. Same Kenwood protocol, VFO/frequency/S-meter polling.
+- **`dsp.c/h`** — Full demodulation pipeline in C: FIR lowpass (windowed sinc), decimation (÷4), AM/SAM/SSB/CW/RTTY/PSK31 detection, noise blanker, spectral DNR (STFT), auto notch, SNR estimator, DC removal, AGC. CW includes APF biquad and Morse decoder.
+- **`drm.c/h`** — Dream 2.2 subprocess integration. FIR decimation filter (192→48 kHz), stdin/stdout pipes, Unix domain socket for JSON status. Binary auto-detection via `/proc/self/exe` relative paths.
+- **`audio.c/h`** — PulseAudio simple API output with ring buffer.
+- **`config.c/h`** — INI config file parsing.
+- **`text.c/h`** — OpenGL text rendering helpers.
+- **`colormap.c/h`** — Turbo colormap for waterfall display.
+
+### Threading Model (Python TUI)
 
 Multiple threads cooperate: main Textual event loop, IQ receive daemon thread (`IQClient`), sounddevice audio callback thread, and in DRM mode three additional threads (Dream audio reader, status socket reader, stderr drain). IQ data flows from network thread into `_on_iq_data()` which does DSP and pushes audio to the ring buffer (or pipes IQ to Dream in DRM mode). UI updates marshalled via `call_from_thread()`. The audio ring buffer is lock-free (single-writer/single-reader). `Demodulator._lock` protects shared UI/IQ thread state. `DRMDecoder._lock` protects process handle and status dict.
+
+### Threading Model (HFDemodGTK)
+
+Multiple pthreads cooperate: main GTK event loop (UI rendering, timer callbacks), IQ receive thread (`iq_client`), PulseAudio write thread, and in DRM mode three additional threads (audio reader, status socket reader, stderr drain). IQ data flows from network thread into the callback which does DSP and writes audio to the ring buffer (or pipes IQ to Dream). UI updates marshalled via `g_idle_add()`. `demodulator_t.lock` (pthread_mutex) protects shared state. `drm_decoder_t.lock` protects Dream subprocess state and status fields.
 
 ### Key Constants
 
@@ -55,6 +95,13 @@ The DRM mode uses the [Dream](http://drm.sourceforge.net) 2.2 open-source DRM de
 - Decoded audio is read from Dream's stdout as raw int16 stereo
 - Status (sync detail per field, SNR, SDC/MSC QAM constellation, service label, text, bitrate, audio codec, mode) is read from a Unix domain socket (`--status-socket`) as JSON
 - Dream binary is auto-detected from `../DRM/` or `PATH`, or configured via `config.conf`
+- In HFDemodGTK, Dream is located relative to the executable via `/proc/self/exe` + `realpath()`, searching up to 3 directory levels above the binary
+
+### HFDemodGTK Build Dependencies
+
+- GTK4, libepoxy (OpenGL), FFTW3 (float), PulseAudio (simple API), OpenGL, pthreads
+- CMake 3.16+, C11 compiler
+- Optional: MesloLGS NF font (for Unicode block character bars)
 
 ## Related Documentation
 
