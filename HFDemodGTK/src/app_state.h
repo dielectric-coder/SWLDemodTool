@@ -73,6 +73,8 @@ typedef struct {
     /* Tune buttons */
     GtkWidget *btn_tune_up;
     GtkWidget *btn_tune_down;
+    GtkWidget *btn_mid_up;
+    GtkWidget *btn_mid_down;
     GtkWidget *btn_fine_up;
     GtkWidget *btn_fine_down;
     GtkWidget *entry_freq;
@@ -107,6 +109,10 @@ typedef struct {
     int             bandwidth_hz;
     int             active_vfo;     /* 0=A, 1=B */
     int             s_meter_raw;
+
+    /* RIT (Receiver Incremental Tuning) */
+    bool            rit_enabled;
+    double          rit_offset_hz;  /* ±offset applied to receive frequency */
 
     /* Config */
     char            host[128];

@@ -205,24 +205,29 @@ void demod_init(demodulator_t *d) {
     pthread_mutex_init(&d->lock, NULL);
 
     d->mode = MODE_AM;
-    d->bandwidth_hz = 6000;
+    d->bandwidth_hz = 5000;
     d->agc_gain = 100.0f;
     d->agc_enabled = true;
     d->volume = 0.5f;
     d->muted = false;
     d->dc_avg = 0.0f;
     d->snr_noise_floor = 1e-10f;
-    d->cw_dit_ms = 80.0f;
 
     varicode_init();
 
     /* Design initial FIR */
     demod_design_fir(d->fir_taps, DEMOD_FIR_TAPS,
-                     (float)d->bandwidth_hz / 2.0f, (float)IQ_SAMPLE_RATE);
+                     (float)d->bandwidth_hz, (float)IQ_SAMPLE_RATE);
 
     /* CW post-filter */
     demod_design_fir(d->cw_fir_taps, DEMOD_CW_FIR_TAPS,
                      400.0f, (float)AUDIO_SAMPLE_RATE);
+
+    /* CW tone analysis FFT plan (cached for reuse) */
+    int cw_spec_len = CW_FFT_SIZE / 2 + 1;
+    d->cw_fft_out = fftwf_alloc_complex(cw_spec_len);
+    d->cw_fft_plan = fftwf_plan_dft_r2c_1d(CW_FFT_SIZE, d->cw_tone_buf,
+                                            d->cw_fft_out, FFTW_ESTIMATE);
 
     /* APF biquad */
     design_apf_biquad(d, CW_BFO_HZ, 15.0f);
@@ -256,25 +261,34 @@ void demod_set_mode(demodulator_t *d, demod_mode_t mode) {
     pthread_mutex_lock(&d->lock);
     d->mode = mode;
 
-    /* Set default bandwidth for mode */
+    /* Set default bandwidth for mode (one-sided cutoff, matches Python TUI) */
     switch (mode) {
     case MODE_AM:
     case MODE_SAM:
     case MODE_SAM_U:
-    case MODE_SAM_L:    d->bandwidth_hz = 6000; break;
+    case MODE_SAM_L:    d->bandwidth_hz = 5000; break;
     case MODE_USB:
     case MODE_LSB:      d->bandwidth_hz = 2400; break;
     case MODE_CW_PLUS:
     case MODE_CW_MINUS: d->bandwidth_hz = 500;  break;
-    case MODE_RTTY:     d->bandwidth_hz = 500;  break;
+    case MODE_RTTY:     d->bandwidth_hz = 2400; break;
     case MODE_PSK31:    d->bandwidth_hz = 500;  break;
     case MODE_DRM:      d->bandwidth_hz = 10000; break;
     default: break;
     }
 
-    /* Redesign FIR for new bandwidth */
-    demod_design_fir(d->fir_taps, DEMOD_FIR_TAPS,
-                     (float)d->bandwidth_hz / 2.0f, (float)IQ_SAMPLE_RATE);
+    /* Redesign FIR for new bandwidth.
+     * For CW: wide IQ pre-filter (2400 Hz) to pass BFO tone;
+     *         the narrow CW post-filter uses bandwidth_hz. */
+    if (mode == MODE_CW_PLUS || mode == MODE_CW_MINUS) {
+        demod_design_fir(d->fir_taps, DEMOD_FIR_TAPS,
+                         CW_PREFILTER_HZ, (float)IQ_SAMPLE_RATE);
+        demod_design_fir(d->cw_fir_taps, DEMOD_CW_FIR_TAPS,
+                         (float)d->bandwidth_hz, (float)AUDIO_SAMPLE_RATE);
+    } else {
+        demod_design_fir(d->fir_taps, DEMOD_FIR_TAPS,
+                         (float)d->bandwidth_hz, (float)IQ_SAMPLE_RATE);
+    }
 
     /* Reset mode-specific state */
     d->pll_phase = 0.0;
@@ -282,6 +296,24 @@ void demod_set_mode(demodulator_t *d, demod_mode_t mode) {
     d->cw_bfo_phase = 0.0;
     d->cw_fir_pos = 0;
     memset(d->cw_fir_buf, 0, sizeof(d->cw_fir_buf));
+    d->cw_peak_hz = 0.0f;
+    d->cw_snr = 0.0f;
+    d->cw_wpm = 0.0f;
+    d->cw_tone_present = false;
+    d->cw_analyze_counter = 0;
+    d->cw_envelope = 0.0f;
+    d->cw_peak_env = 0.0f;
+    d->cw_key_state = false;
+    d->cw_edge_sample = 0;
+    d->cw_sample_count = 0;
+    d->cw_last_keyup_sample = 0;
+    d->cw_dit_ms = 0.0f;
+    d->cw_element_count = 0;
+    d->cw_char_len = 0;
+    d->morse_text_pos = 0;
+    d->morse_text[0] = '\0';
+    memset(d->cw_tone_buf, 0, sizeof(d->cw_tone_buf));
+    d->cw_tone_pos = 0;
     d->rtty_fir_pos = 0;
     d->rtty_state = 0;
     d->rtty_discrim = 0.0f;
@@ -316,8 +348,15 @@ void demod_set_mode(demodulator_t *d, demod_mode_t mode) {
 void demod_set_bandwidth(demodulator_t *d, int bw_hz) {
     pthread_mutex_lock(&d->lock);
     d->bandwidth_hz = bw_hz;
-    demod_design_fir(d->fir_taps, DEMOD_FIR_TAPS,
-                     (float)bw_hz / 2.0f, (float)IQ_SAMPLE_RATE);
+    if (d->mode == MODE_CW_PLUS || d->mode == MODE_CW_MINUS) {
+        demod_design_fir(d->fir_taps, DEMOD_FIR_TAPS,
+                         CW_PREFILTER_HZ, (float)IQ_SAMPLE_RATE);
+        demod_design_fir(d->cw_fir_taps, DEMOD_CW_FIR_TAPS,
+                         (float)bw_hz, (float)AUDIO_SAMPLE_RATE);
+    } else {
+        demod_design_fir(d->fir_taps, DEMOD_FIR_TAPS,
+                         (float)bw_hz, (float)IQ_SAMPLE_RATE);
+    }
     pthread_mutex_unlock(&d->lock);
 }
 
@@ -375,6 +414,12 @@ static iq_sample_t noise_blank(demodulator_t *d, iq_sample_t s) {
 
     return delayed;
 }
+
+/* Forward declarations for CW helpers */
+static void append_morse_char(demodulator_t *d, char ch);
+static void cw_decode_char(demodulator_t *d);
+static void cw_add_element(demodulator_t *d, char elem);
+static void cw_update_wpm(demodulator_t *d);
 
 /* ── Detection modes ──────────────────────────────────────────── */
 
@@ -445,7 +490,235 @@ static float detect_cw(demodulator_t *d, float audio_sample, int is_minus) {
     d->cw_tone_buf[d->cw_tone_pos] = filtered;
     d->cw_tone_pos = (d->cw_tone_pos + 1) % CW_FFT_SIZE;
 
+    /* CW keying envelope tracker (per-sample) */
+    float abs_s = fabsf(filtered);
+    if (abs_s > d->cw_envelope)
+        d->cw_envelope += CW_ENV_ATTACK * (abs_s - d->cw_envelope);
+    else
+        d->cw_envelope += CW_ENV_DECAY * (abs_s - d->cw_envelope);
+    if (d->cw_envelope > d->cw_peak_env)
+        d->cw_peak_env = d->cw_envelope;
+    else
+        d->cw_peak_env *= CW_PEAK_DECAY;
+
+    /* Per-sample keying state machine */
+    {
+        int64_t sample_pos = d->cw_sample_count;
+        int min_edge_samples = (int)(CW_MIN_EDGE_MS * AUDIO_SAMPLE_RATE / 1000.0f);
+        bool key_now;
+        if (d->cw_key_state)
+            key_now = d->cw_envelope > d->cw_peak_env * CW_THRESHOLD_DN && d->cw_peak_env > CW_MIN_PEAK;
+        else
+            key_now = d->cw_envelope > d->cw_peak_env * CW_THRESHOLD_UP && d->cw_peak_env > CW_MIN_PEAK;
+
+        if (d->cw_key_state != key_now) {
+            int64_t edge_dur = sample_pos - d->cw_edge_sample;
+            if (edge_dur >= min_edge_samples) {
+                if (d->cw_key_state && !key_now) {
+                    /* Key-up: measure element duration */
+                    float dur_ms = edge_dur * 1000.0f / AUDIO_SAMPLE_RATE;
+                    if (dur_ms > 15.0f && dur_ms < 2000.0f) {
+                        float gap_ms = 0.0f;
+                        if (d->cw_last_keyup_sample > 0)
+                            gap_ms = (d->cw_edge_sample - d->cw_last_keyup_sample) * 1000.0f / AUDIO_SAMPLE_RATE;
+                        if (d->cw_element_count < 64)
+                            d->cw_element_ms[d->cw_element_count++] = dur_ms;
+                        else {
+                            memmove(d->cw_element_ms, d->cw_element_ms + 1, 63 * sizeof(float));
+                            d->cw_element_ms[63] = dur_ms;
+                        }
+                        cw_update_wpm(d);
+                        if (d->cw_dit_ms > 0) {
+                            if (gap_ms > d->cw_dit_ms * 4.0f && d->cw_char_len > 0) {
+                                cw_decode_char(d);
+                                append_morse_char(d, ' ');
+                            } else if (gap_ms > d->cw_dit_ms * 2.0f && d->cw_char_len > 0) {
+                                cw_decode_char(d);
+                            }
+                            cw_add_element(d, dur_ms < d->cw_dit_ms * 2.0f ? '.' : '-');
+                        }
+                    }
+                    d->cw_last_keyup_sample = sample_pos;
+                }
+                d->cw_edge_sample = sample_pos;
+                d->cw_key_state = key_now;
+            }
+        }
+        d->cw_sample_count++;
+    }
+
     return filtered;
+}
+
+/* ── CW Morse text append ─────────────────────────────────────── */
+
+static void append_morse_char(demodulator_t *d, char ch) {
+    if (ch == '\0') return;
+    if (d->morse_text_pos >= DECODED_TEXT_LEN) {
+        memmove(d->morse_text, d->morse_text + 1, DECODED_TEXT_LEN - 1);
+        d->morse_text_pos = DECODED_TEXT_LEN - 1;
+    }
+    d->morse_text[d->morse_text_pos++] = ch;
+    d->morse_text[d->morse_text_pos] = '\0';
+}
+
+static char morse_lookup(const char *code) {
+    for (int i = 0; morse_table[i].code; i++) {
+        if (strcmp(morse_table[i].code, code) == 0)
+            return morse_table[i].ch;
+    }
+    return '?';
+}
+
+static void cw_decode_char(demodulator_t *d) {
+    if (d->cw_char_len == 0) return;
+    d->cw_current_char[d->cw_char_len] = '\0';
+    char ch = morse_lookup(d->cw_current_char);
+    append_morse_char(d, ch);
+    d->cw_char_len = 0;
+}
+
+static void cw_add_element(demodulator_t *d, char elem) {
+    if (d->cw_char_len < (int)sizeof(d->cw_current_char) - 1)
+        d->cw_current_char[d->cw_char_len++] = elem;
+}
+
+/* ── CW WPM estimation (k-means dit/dah separation) ──────────── */
+
+static int float_cmp(const void *a, const void *b) {
+    float fa = *(const float *)a, fb = *(const float *)b;
+    return (fa > fb) - (fa < fb);
+}
+
+static void cw_update_wpm(demodulator_t *d) {
+    if (d->cw_element_count < 4) return;
+
+    float sorted[64];
+    int n = d->cw_element_count;
+    memcpy(sorted, d->cw_element_ms, n * sizeof(float));
+    qsort(sorted, n, sizeof(float), float_cmp);
+
+    float boundary = sorted[n / 2];
+    for (int iter = 0; iter < 5; iter++) {
+        float dit_sum = 0; int dit_n = 0;
+        float dah_sum = 0; int dah_n = 0;
+        for (int i = 0; i < n; i++) {
+            if (sorted[i] < boundary) { dit_sum += sorted[i]; dit_n++; }
+            else { dah_sum += sorted[i]; dah_n++; }
+        }
+        if (!dit_n || !dah_n) break;
+        /* Use medians for robustness */
+        float dit_med = sorted[dit_n / 2];
+        float dah_med = sorted[dit_n + (dah_n > 1 ? dah_n / 2 : 0)];
+        boundary = (dit_med + dah_med) / 2.0f;
+    }
+
+    /* Extract dit duration from short elements */
+    int dit_count = 0;
+    for (int i = 0; i < n; i++)
+        if (sorted[i] < boundary) dit_count++;
+    if (dit_count == 0) dit_count = n / 2;
+    if (dit_count > 0) {
+        float dit_ms = sorted[dit_count / 2];
+        if (dit_ms > 0) {
+            float new_wpm = 1200.0f / dit_ms;
+            if (d->cw_wpm == 0.0f)
+                d->cw_wpm = new_wpm;
+            else
+                d->cw_wpm = CW_WPM_SMOOTH * d->cw_wpm + (1.0f - CW_WPM_SMOOTH) * new_wpm;
+            if (d->cw_dit_ms == 0.0f)
+                d->cw_dit_ms = dit_ms;
+            else
+                d->cw_dit_ms = CW_DIT_SMOOTH * d->cw_dit_ms + (1.0f - CW_DIT_SMOOTH) * dit_ms;
+        }
+    }
+}
+
+/* ── CW tone analysis (FFT-based peak + SNR) ─────────────────── */
+
+static void cw_analyze_tone(demodulator_t *d) {
+    /* Reorder ring buffer for FFT */
+    float ordered[CW_FFT_SIZE];
+    int p = d->cw_tone_pos;
+    if (p > 0) {
+        memcpy(ordered, d->cw_tone_buf + p, (CW_FFT_SIZE - p) * sizeof(float));
+        memcpy(ordered + (CW_FFT_SIZE - p), d->cw_tone_buf, p * sizeof(float));
+    } else {
+        memcpy(ordered, d->cw_tone_buf, CW_FFT_SIZE * sizeof(float));
+    }
+
+    /* Apply Hanning window */
+    for (int i = 0; i < CW_FFT_SIZE; i++) {
+        float w = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * i / (CW_FFT_SIZE - 1)));
+        ordered[i] *= w;
+    }
+
+    /* Real FFT using cached FFTW plan */
+    int spec_len = CW_FFT_SIZE / 2 + 1;
+    fftwf_execute_dft_r2c(d->cw_fft_plan, ordered, d->cw_fft_out);
+
+    /* Power spectrum */
+    float spec[spec_len];
+    for (int i = 0; i < spec_len; i++)
+        spec[i] = d->cw_fft_out[i][0] * d->cw_fft_out[i][0]
+                + d->cw_fft_out[i][1] * d->cw_fft_out[i][1];
+
+    /* Search passband around BFO frequency */
+    float bin_hz = (float)AUDIO_SAMPLE_RATE / CW_FFT_SIZE;
+    int lo = (int)((CW_BFO_HZ - d->bandwidth_hz) / bin_hz);
+    int hi = (int)((CW_BFO_HZ + d->bandwidth_hz) / bin_hz);
+    if (lo < 1) lo = 1;
+    if (hi >= spec_len - 1) hi = spec_len - 2;
+    int pb_len = hi - lo + 1;
+    if (pb_len < 3) return;
+
+    /* Find peak in passband */
+    int pk = 0;
+    float pk_val = 0;
+    float total = 0;
+    for (int i = 0; i < pb_len; i++) {
+        float v = spec[lo + i];
+        total += v;
+        if (v > pk_val) { pk_val = v; pk = i; }
+    }
+
+    /* Tone detection: check energy concentration */
+    bool tone = (total > 0 && pb_len > 2) ? (pk_val / total > CW_TONE_CONCENTRATION) : false;
+    d->cw_tone_present = tone;
+
+    int pk_abs = lo + pk;
+
+    if (tone && pk_abs > 0 && pk_abs < spec_len - 1) {
+        /* SNR: peak vs noise floor */
+        float noise_sum = 0;
+        int noise_n = 0;
+        for (int i = 0; i < pb_len; i++) {
+            if (i < pk - 1 || i > pk + 1) {
+                noise_sum += spec[lo + i];
+                noise_n++;
+            }
+        }
+        if (noise_n > 0) {
+            float noise_mean = noise_sum / noise_n;
+            if (noise_mean > 0) {
+                float snr = 10.0f * log10f(pk_val / noise_mean);
+                d->cw_snr = CW_SNR_SMOOTH * d->cw_snr + (1.0f - CW_SNR_SMOOTH) * snr;
+            }
+        }
+
+        /* Parabolic interpolation for sub-bin accuracy */
+        float a = spec[pk_abs - 1], b = spec[pk_abs], c = spec[pk_abs + 1];
+        float denom = a - 2.0f * b + c;
+        float delta = (fabsf(denom) > 1e-20f) ? 0.5f * (a - c) / denom : 0.0f;
+        float peak_hz = (pk_abs + delta) * bin_hz;
+
+        if (d->cw_peak_hz == 0.0f)
+            d->cw_peak_hz = peak_hz;
+        else
+            d->cw_peak_hz = CW_PEAK_HZ_SMOOTH * d->cw_peak_hz + (1.0f - CW_PEAK_HZ_SMOOTH) * peak_hz;
+    } else {
+        d->cw_snr *= CW_SNR_SMOOTH;
+    }
 }
 
 static void append_decoded_char(demodulator_t *d, char ch) {
@@ -1030,6 +1303,20 @@ int demod_process(demodulator_t *d, const uint8_t *iq_data, int iq_bytes,
             .q = (float)q_raw / 2147483648.0f
         };
 
+        /* RIT frequency shift (NCO mixer) */
+        if (d->rit_offset_hz != 0.0) {
+            double phase_inc = 2.0 * M_PI * d->rit_offset_hz / IQ_SAMPLE_RATE;
+            float cos_p = (float)cos(d->rit_phase);
+            float sin_p = (float)sin(d->rit_phase);
+            float si = sample.i * cos_p - sample.q * sin_p;
+            float sq = sample.i * sin_p + sample.q * cos_p;
+            sample.i = si;
+            sample.q = sq;
+            d->rit_phase += phase_inc;
+            if (d->rit_phase > 2.0 * M_PI) d->rit_phase -= 2.0 * M_PI;
+            if (d->rit_phase < -2.0 * M_PI) d->rit_phase += 2.0 * M_PI;
+        }
+
         /* Noise blanker */
         sample = noise_blank(d, sample);
 
@@ -1089,6 +1376,25 @@ int demod_process(demodulator_t *d, const uint8_t *iq_data, int iq_bytes,
         return 0;
     }
 
+    /* CW tone analysis (periodic FFT) + silence flush */
+    if (d->mode == MODE_CW_PLUS || d->mode == MODE_CW_MINUS) {
+        d->cw_analyze_counter += raw_count;
+        if (d->cw_analyze_counter >= CW_ANALYZE_INTERVAL) {
+            d->cw_analyze_counter = 0;
+            cw_analyze_tone(d);
+        }
+        /* Flush character on long silence */
+        if (!d->cw_key_state && d->cw_dit_ms > 0 && d->cw_char_len > 0
+            && d->cw_last_keyup_sample > 0) {
+            float silence_ms = (d->cw_sample_count - d->cw_last_keyup_sample)
+                               * 1000.0f / AUDIO_SAMPLE_RATE;
+            if (silence_ms > d->cw_dit_ms * 4.0f) {
+                cw_decode_char(d);
+                append_morse_char(d, ' ');
+            }
+        }
+    }
+
     /* Post-detection processing pipeline (block-based) */
 
     /* 1. Spectral DNR */
@@ -1134,5 +1440,7 @@ int demod_process(demodulator_t *d, const uint8_t *iq_data, int iq_bytes,
 }
 
 void demod_destroy(demodulator_t *d) {
+    if (d->cw_fft_plan) fftwf_destroy_plan(d->cw_fft_plan);
+    if (d->cw_fft_out)  fftwf_free(d->cw_fft_out);
     pthread_mutex_destroy(&d->lock);
 }

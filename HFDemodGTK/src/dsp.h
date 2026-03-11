@@ -9,6 +9,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <pthread.h>
+#include <fftw3.h>
 
 /* IQ sample as two floats (I, Q) */
 typedef struct { float i, q; } iq_sample_t;
@@ -52,6 +53,7 @@ typedef enum {
 #define AUDIO_SAMPLE_RATE    48000
 #define AGC_TARGET           0.3f
 #define CW_BFO_HZ           700.0f
+#define CW_PREFILTER_HZ     2400.0f  /* IQ pre-filter cutoff for CW modes */
 #define CW_FFT_SIZE          8192
 #define RTTY_MARK_HZ         2125.0f
 #define RTTY_SPACE_HZ        2295.0f
@@ -87,11 +89,30 @@ typedef enum {
 #define SNR_NOISE_UP         0.005f
 #define SNR_NOISE_DOWN       0.1f
 
+/* CW tone analysis constants */
+#define CW_TONE_CONCENTRATION 0.25f
+#define CW_SNR_SMOOTH         0.8f
+#define CW_PEAK_HZ_SMOOTH    0.85f
+#define CW_WPM_SMOOTH         0.8f
+#define CW_DIT_SMOOTH          0.8f
+#define CW_ENV_ATTACK          0.06f
+#define CW_ENV_DECAY           0.003f
+#define CW_PEAK_DECAY          0.99998f
+#define CW_THRESHOLD_UP        0.4f
+#define CW_THRESHOLD_DN        0.2f
+#define CW_MIN_EDGE_MS         8.0f
+#define CW_MIN_PEAK            1e-6f
+#define CW_ANALYZE_INTERVAL    2048    /* samples between FFT analyses */
+
 typedef struct {
     pthread_mutex_t lock;
 
     /* Current mode */
     demod_mode_t mode;
+
+    /* RIT (Receiver Incremental Tuning) — NCO frequency shift */
+    double  rit_offset_hz;      /* offset in Hz applied to IQ before demod */
+    double  rit_phase;          /* NCO phase accumulator */
 
     /* FIR lowpass filter (pre-decimation) */
     float       fir_taps[DEMOD_FIR_TAPS];
@@ -168,15 +189,24 @@ typedef struct {
     /* APF biquad state */
     float   apf_x1, apf_x2, apf_y1, apf_y2;
     float   apf_b0, apf_b1, apf_b2, apf_a1, apf_a2;
-    /* CW keying */
+    /* CW tone analysis */
+    bool    cw_tone_present;
+    int     cw_analyze_counter;     /* samples since last FFT analysis */
+    fftwf_plan   cw_fft_plan;       /* cached FFTW plan for tone analysis */
+    fftwf_complex *cw_fft_out;      /* cached FFTW output buffer */
+
+    /* CW keying / speed / Morse decoder */
     float   cw_envelope;
     float   cw_peak_env;
     bool    cw_key_state;
-    int     cw_debounce;
-    float   cw_dit_ms;
-    char    cw_element_buf[64];
+    int64_t cw_edge_sample;         /* sample index of last state change */
+    int64_t cw_sample_count;        /* running sample counter */
+    int64_t cw_last_keyup_sample;   /* sample index of last key-up */
+    float   cw_dit_ms;             /* estimated dit duration */
+    float   cw_element_ms[64];     /* recent element durations */
     int     cw_element_count;
-    int     cw_gap_samples;
+    char    cw_current_char[16];   /* elements of char being built (. and -) */
+    int     cw_char_len;
 
     /* RTTY state */
     float   rtty_mark_fir[DEMOD_CW_FIR_TAPS];

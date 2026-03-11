@@ -275,6 +275,30 @@ static void on_resize(GtkGLArea *area, int width, int height, gpointer data) {
     (void)area; (void)width; (void)height; (void)data;
 }
 
+/* ── Bandwidth limits per mode (min, max, step) ──────────────── */
+
+static void bw_limits(demod_mode_t mode, int *bw_min, int *bw_max, int *step) {
+    switch (mode) {
+    case MODE_AM:
+    case MODE_SAM:
+    case MODE_SAM_U:
+    case MODE_SAM_L:
+        *bw_min = 4000; *bw_max = 10000; *step = 1000; break;
+    case MODE_USB:
+    case MODE_LSB:
+        *bw_min = 1200; *bw_max = 3200; *step = 100; break;
+    case MODE_CW_PLUS:
+    case MODE_CW_MINUS:
+        *bw_min = 100; *bw_max = 1000; *step = 50; break;
+    case MODE_RTTY:
+        *bw_min = 1200; *bw_max = 3200; *step = 100; break;
+    case MODE_PSK31:
+        *bw_min = 200; *bw_max = 1000; *step = 50; break;
+    default:
+        *bw_min = 100; *bw_max = 24000; *step = 500; break;
+    }
+}
+
 /* ── GL area keyboard input ───────────────────────────────────── */
 
 static gboolean on_key_pressed(GtkEventControllerKey *ctrl,
@@ -330,6 +354,41 @@ static gboolean on_key_pressed(GtkEventControllerKey *ctrl,
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(s->btn_nb),
                                      s->demod.nb_threshold != NB_OFF);
         break;
+    case GDK_KEY_r:  /* r: toggle RIT on/off */
+        s->rit_enabled = !s->rit_enabled;
+        s->demod.rit_offset_hz = s->rit_enabled ? s->rit_offset_hz : 0.0;
+        break;
+    case GDK_KEY_plus:
+    case GDK_KEY_equal:  /* +/= : RIT up 10 Hz */
+        s->rit_offset_hz += 10.0;
+        if (s->rit_enabled) s->demod.rit_offset_hz = s->rit_offset_hz;
+        break;
+    case GDK_KEY_minus:  /* - : RIT down 10 Hz */
+        if (!(state & GDK_SHIFT_MASK)) {
+            s->rit_offset_hz -= 10.0;
+            if (s->rit_enabled) s->demod.rit_offset_hz = s->rit_offset_hz;
+        } else {
+            return FALSE;
+        }
+        break;
+    case GDK_KEY_0:  /* 0: clear RIT offset */
+        s->rit_offset_hz = 0.0;
+        s->demod.rit_offset_hz = 0.0;
+        break;
+    case GDK_KEY_w: {  /* w: BW down, W (Shift+w): BW up */
+        int bmin, bmax, bstep;
+        bw_limits(s->demod.mode, &bmin, &bmax, &bstep);
+        if (state & GDK_SHIFT_MASK) {
+            int new_bw = s->demod.bandwidth_hz + bstep;
+            if (new_bw > bmax) new_bw = bmax;
+            demod_set_bandwidth(&s->demod, new_bw);
+        } else {
+            int new_bw = s->demod.bandwidth_hz - bstep;
+            if (new_bw < bmin) new_bw = bmin;
+            demod_set_bandwidth(&s->demod, new_bw);
+        }
+        break;
+    }
     default:
         return FALSE;
     }
@@ -362,11 +421,15 @@ static gboolean on_display_update(gpointer data) {
 
     /* ── VFO bar ── */
     double freq_mhz = s->frequency_hz / 1e6;
-    snprintf(buf, sizeof(buf), "  VFO: %s    Frequency: %.6f MHz    Mode: %s    BW: %d Hz",
+    char rit_str[48] = "";
+    if (s->rit_enabled)
+        snprintf(rit_str, sizeof(rit_str), "    RIT: %+.0f Hz", s->rit_offset_hz);
+    snprintf(buf, sizeof(buf), "  VFO: %s    Frequency: %.6f MHz    Mode: %s    BW: %d Hz%s",
              s->active_vfo == 0 ? "A" : "B",
              freq_mhz,
              demod_mode_name(s->demod.mode),
-             s->demod.bandwidth_hz);
+             s->demod.bandwidth_hz,
+             rit_str);
     gtk_label_set_text(GTK_LABEL(s->lbl_vfo_bar), buf);
 
     /* ── Connection info ── */
@@ -501,6 +564,18 @@ static gboolean on_display_update(gpointer data) {
         default:
             show_mode_info = 0;
             break;
+        }
+        /* Append RIT info if enabled */
+        if (s->rit_enabled) {
+            char rit_info[64];
+            snprintf(rit_info, sizeof(rit_info), "    RIT: %+.0f Hz", s->rit_offset_hz);
+            if (show_mode_info) {
+                size_t len = strlen(buf);
+                snprintf(buf + len, sizeof(buf) - len, "%s", rit_info);
+            } else {
+                snprintf(buf, sizeof(buf), "   %s", rit_info);
+                show_mode_info = 1;
+            }
         }
         if (show_mode_info) {
             gtk_label_set_text(GTK_LABEL(s->lbl_mode_info), buf);
@@ -778,6 +853,18 @@ static void on_tune_down(GtkButton *btn, gpointer data) {
     set_frequency(s, s->frequency_hz - 1000.0);
 }
 
+static void on_mid_up(GtkButton *btn, gpointer data) {
+    (void)btn;
+    AppState *s = (AppState *)data;
+    set_frequency(s, s->frequency_hz + 100.0);
+}
+
+static void on_mid_down(GtkButton *btn, gpointer data) {
+    (void)btn;
+    AppState *s = (AppState *)data;
+    set_frequency(s, s->frequency_hz - 100.0);
+}
+
 static void on_fine_up(GtkButton *btn, gpointer data) {
     (void)btn;
     AppState *s = (AppState *)data;
@@ -967,7 +1054,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     g_signal_connect(s->btn_disconnect, "clicked", G_CALLBACK(on_disconnect_clicked), s);
 
     /* ── VFO bar (Frequency/Mode/BW) ── */
-    s->lbl_vfo_bar = gtk_label_new("  VFO: A    Frequency: 0.000000 MHz    Mode: AM    BW: 6000 Hz");
+    s->lbl_vfo_bar = gtk_label_new("  VFO: A    Frequency: 0.000000 MHz    Mode: AM    BW: 5000 Hz");
     gtk_widget_add_css_class(s->lbl_vfo_bar, "vfo-bar");
     gtk_widget_set_halign(s->lbl_vfo_bar, GTK_ALIGN_FILL);
     gtk_label_set_xalign(GTK_LABEL(s->lbl_vfo_bar), 0.5f);
@@ -983,25 +1070,29 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_box_append(GTK_BOX(tune_row), tune_label);
 
     s->btn_tune_down = gtk_button_new_with_label("-1k");
+    s->btn_mid_down  = gtk_button_new_with_label("-100");
     s->btn_fine_down = gtk_button_new_with_label("-10");
     s->entry_freq    = gtk_entry_new();
     s->btn_fine_up   = gtk_button_new_with_label("+10");
+    s->btn_mid_up    = gtk_button_new_with_label("+100");
     s->btn_tune_up   = gtk_button_new_with_label("+1k");
 
     gtk_entry_set_placeholder_text(GTK_ENTRY(s->entry_freq), "kHz");
     gtk_widget_set_size_request(s->entry_freq, 80, -1);
 
     GtkWidget *tune_btns[] = {
-        s->btn_tune_down, s->btn_fine_down, s->entry_freq,
-        s->btn_fine_up, s->btn_tune_up
+        s->btn_tune_down, s->btn_mid_down, s->btn_fine_down, s->entry_freq,
+        s->btn_fine_up, s->btn_mid_up, s->btn_tune_up
     };
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 7; i++) {
         gtk_widget_set_size_request(tune_btns[i], 60, -1);
         gtk_box_append(GTK_BOX(tune_row), tune_btns[i]);
     }
 
     g_signal_connect(s->btn_tune_up, "clicked", G_CALLBACK(on_tune_up), s);
     g_signal_connect(s->btn_tune_down, "clicked", G_CALLBACK(on_tune_down), s);
+    g_signal_connect(s->btn_mid_up, "clicked", G_CALLBACK(on_mid_up), s);
+    g_signal_connect(s->btn_mid_down, "clicked", G_CALLBACK(on_mid_down), s);
     g_signal_connect(s->btn_fine_up, "clicked", G_CALLBACK(on_fine_up), s);
     g_signal_connect(s->btn_fine_down, "clicked", G_CALLBACK(on_fine_down), s);
     g_signal_connect(s->entry_freq, "activate", G_CALLBACK(on_freq_entry_activate), s);
