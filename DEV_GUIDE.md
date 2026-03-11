@@ -2,8 +2,6 @@
 
 ## Project Structure
 
-### Python TUI
-
 ```
 src/swl_demod_tool/
     __init__.py       # Version string
@@ -16,38 +14,9 @@ src/swl_demod_tool/
     config.py         # INI config file handling
 ```
 
-### HFDemodGTK (C/GTK4)
-
-```
-HFDemodGTK/
-    CMakeLists.txt        # CMake build (C11, GTK4, libepoxy, FFTW3f, PulseAudio)
-    shaders/              # GLSL vertex/fragment shaders for spectrum/waterfall
-    src/
-        main.c            # GTK4 app setup, UI layout, CSS, keyboard handler, CLI flags
-        app_state.h       # Central AppState struct (widgets, rendering, DSP, audio, DRM)
-        renderer.c/h      # OpenGL rendering (shader compilation, VAO/VBO)
-        spectrum.c/h      # OpenGL spectrum display (FFT, peak hold, zoom)
-        waterfall.c/h     # OpenGL waterfall spectrogram (turbo colormap)
-        fft.c/h           # FFTW3-based FFT (4096-point, float)
-        iq_client.c/h     # TCP IQ client (ELAD protocol, pthread receive loop)
-        cat_client.c/h    # TCP CAT client (Kenwood protocol, VFO/freq/S-meter)
-        dsp.c/h           # Full DSP pipeline: FIR, decimate, demod, NB, DNR, notch, AGC
-        drm.c/h           # Dream 2.2 subprocess (FIR decimation, pipes, JSON status socket)
-        audio.c/h         # PulseAudio simple API output with ring buffer
-        config.c/h        # INI config file parsing
-        text.c/h          # OpenGL text rendering
-        colormap.c/h      # Turbo colormap for waterfall
-```
-
 ## Architecture
 
-### Python TUI
-
 Real-time data pipeline: **IQ network stream -> DSP -> audio output**, with a Textual TUI for display and control.
-
-### HFDemodGTK
-
-Same pipeline in C: **IQ network stream -> DSP -> audio output**, with a GTK4 GUI. Uses GtkGLArea with OpenGL for spectrum and waterfall rendering. All DSP is implemented in pure C with FFTW3 for FFT operations. Audio output uses PulseAudio simple API instead of sounddevice.
 
 ### Threading Model
 
@@ -204,10 +173,6 @@ The `DRMDecoder` class manages the subprocess lifecycle:
 
 Dream binary auto-detection order: configured path, `../DRM/dream-2.2/dream`, `PATH`.
 
-In HFDemodGTK, Dream is located relative to the executable using `/proc/self/exe` + `realpath()`, searching `../DRM/`, `../../DRM/`, and `../../../DRM/` relative to the binary. This handles the common case where the executable is in `HFDemodGTK/build/` and Dream is in a sibling `DRM/` directory at any depth.
-
-The DRM decimation filter in HFDemodGTK uses a 127-tap FIR lowpass (24 kHz cutoff at 192 kHz) with circular buffer convolution (128-element buffer, modulo-128 indexing). IQ samples are converted to int16 with clipping before being written to Dream's stdin.
-
 ### Key Constants
 
 | Constant          | Value   | Location      |
@@ -236,42 +201,3 @@ swl-demod --host <server-ip>
 ```
 
 Requires an Elad Spectrum IQ+CAT server (e.g., from [EladSpectrum](https://github.com/mikewam/EladSpectrum)).
-
-## HFDemodGTK Development Setup
-
-### Dependencies
-
-- GTK4 development headers
-- libepoxy (OpenGL function loading)
-- FFTW3 float precision (`fftw3f`)
-- PulseAudio simple API (`libpulse-simple`)
-- OpenGL
-- CMake 3.16+, C11 compiler
-- Optional: MesloLGS NF font (for Unicode block character bars in status display)
-
-### Building
-
-```bash
-cd HFDemodGTK
-mkdir -p build && cd build
-cmake ..
-make
-```
-
-### Running
-
-```bash
-./hfdemod-gtk
-./hfdemod-gtk --host 192.168.1.10
-```
-
-### HFDemodGTK Threading Model
-
-1. **Main thread** — GTK event loop, UI rendering, `g_timeout_add()` timer callbacks for display updates and CAT polling
-2. **IQ receive thread** — pthread in `iq_client`, reads TCP stream, invokes callback
-3. **PulseAudio write thread** — pthread in `audio`, pulls from ring buffer and writes to PulseAudio
-4. **DRM audio reader thread** (DRM mode) — reads decoded int16 audio from Dream's stdout
-5. **DRM status socket thread** (DRM mode) — reads JSON status from Dream's Unix domain socket (4KB buffered reads)
-6. **DRM stderr drain thread** (DRM mode) — logs Dream diagnostic output
-
-All pthread mutexes use `PTHREAD_MUTEX_INITIALIZER`. UI updates from background threads use `g_idle_add()` for thread-safe GTK access.

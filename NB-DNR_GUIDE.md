@@ -1,6 +1,6 @@
 # Noise Blanker & Dynamic Noise Reduction — Code Guide
 
-This document explains the NB and DNR implementations in `src/swl_demod_tool/dsp.py` (Python TUI) and `HFDemodGTK/src/dsp.c` (C/GTK4 port).
+This document explains the NB and DNR implementations in `src/swl_demod_tool/dsp.py`.
 
 ## Pipeline Position
 
@@ -228,19 +228,6 @@ The DC removal EMA (`_DC_ALPHA = 0.99`) has a long time constant (~100 blocks to
 
 ---
 
-## HFDemodGTK (C Implementation)
+## C/GTK4 Port
 
-The C port in `HFDemodGTK/src/dsp.c` implements the same NB and DNR algorithms using FFTW3 instead of NumPy:
-
-### Key Differences from Python
-
-- **FFT**: Uses `fftwf_plan_dft_r2c_1d` / `fftwf_plan_dft_c2r_1d` (single-precision float FFTW3) instead of `np.fft.rfft`/`np.fft.irfft`.
-- **State**: All NB/DNR state is embedded in the `demodulator_t` struct (stack-allocated arrays, no heap allocation per frame).
-- **Thread safety**: `demodulator_t.lock` (pthread_mutex) protects shared state. NB/DNR processing state is only accessed from the IQ thread.
-- **Windowed sinc FIR**: `demod_design_fir()` implements the same windowed sinc lowpass as scipy's `firwin`, using a Blackman window.
-- **Percentile**: Noise floor percentile computed via `qsort` on passband bin powers (no NumPy percentile equivalent in C).
-- **Constants**: Same values as Python — `DNR_FFT_SIZE=512`, `DNR_HOP=256`, `DNR_NOISE_PERCENTILE=30`, etc. Defined in `dsp.h`.
-
-### Auto Notch (C only enhancement)
-
-The C port also includes an auto notch filter (`AN_FFT_SIZE=1024`, `AN_HOP=512`) using the same STFT overlap-add approach. It detects persistent tones (heterodynes, carriers) and notches them out. The Python TUI does not have this feature.
+The C port ([HFDemodGTK](https://github.com/dielectric-coder/HFDemodGTK)) implements the same NB and DNR algorithms using FFTW3 instead of NumPy. See that repository for C-specific details.
