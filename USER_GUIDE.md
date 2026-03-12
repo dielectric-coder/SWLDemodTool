@@ -69,7 +69,7 @@ The app auto-connects on startup to `localhost:4533` (IQ) and `localhost:4532` (
 | `r`             | Reconnect                           |
 | `m`             | Toggle mute                         |
 | `a`             | Toggle AGC                          |
-| `x`             | Cycle mode (AM → SAM → ... → CW± → RTTY → PSK31 → DRM) |
+| `x`             | Cycle mode (AM → SAM → ... → CW± → RTTY± → PSK31 → DRM) |
 | `v`             | Toggle VFO (A ↔ B)                  |
 | `+` / `-`       | Volume up / down                    |
 | `]` / `[`       | Increase / decrease demod bandwidth |
@@ -117,7 +117,7 @@ A dedicated panel below the audio info displays mode-specific indicators:
   - Dim `-` = not present
 - Coding info shows the SDC and MSC QAM constellation (e.g., `SDC 16-QAM, MSC 64-QAM`) when available from the Dream decoder
 
-**RTTY mode:** Baud rate, shift, SNR, and live decoded Baudot text.
+**RTTY mode:** Baud rate, shift, mark/space tone level bars, active tone indicator, SNR, and live decoded Baudot text.
 
 **PSK31 mode:** Baud rate, SNR, and live decoded Varicode text.
 
@@ -146,7 +146,8 @@ A dedicated panel below the audio info displays mode-specific indicators:
 | LSB   | Product (I channel) | Lower sideband, 2.4 kHz bandwidth |
 | CW+   | Product + BFO (+700 Hz) | Morse code, upper sideband, 500 Hz bandwidth |
 | CW-   | Product + BFO (-700 Hz) | Morse code, lower sideband, 500 Hz bandwidth |
-| RTTY  | FSK (mark/space)        | Radio Teletype, 45.45 Bd, 170 Hz shift, Baudot |
+| RTTY+ | FSK (mark/space, normal) | Radio Teletype, 45.45 Bd, 170 Hz shift, Baudot |
+| RTTY- | FSK (mark/space, reverse) | Radio Teletype, reversed polarity |
 | PSK31 | BPSK differential       | Phase Shift Keying, 31.25 Bd, Varicode |
 | DRM   | Dream decoder | Digital Radio Mondiale, requires Dream binary |
 
@@ -167,6 +168,10 @@ The mode info panel shows a tuning indicator, tone SNR, estimated keying speed (
 ### RTTY Mode
 
 RTTY (Radio Teletype) demodulates FSK signals using the amateur standard: 2125 Hz mark tone, 2295 Hz space tone (170 Hz shift), 45.45 baud. The demodulator uses dual bandpass filters to isolate mark and space tones, compares their envelopes to make bit decisions, and recovers the bit clock from the start bit. Characters are decoded using the ITA2/Baudot 5-bit code with LTRS/FIGS shift support. Default bandwidth is 2400 Hz (adjustable 1200-3200 Hz). Decoded text appears in the mode info panel; press `t` to clear.
+
+RTTY+ uses normal polarity (mark low, space high) — the standard amateur convention used by stations like W1AW. RTTY- reverses mark/space interpretation for commercial or maritime stations that use inverted polarity.
+
+The mode info panel shows a mark/space tuning indicator with bar graphs for each tone's level and an active tone label (`MARK`/`SPC`). When properly tuned, you should see both bars active with clear alternation as the signal is received.
 
 ### PSK31 Mode
 

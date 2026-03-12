@@ -117,7 +117,7 @@ IQ (192 kHz) -> [Noise Blanker] (impulse detection + zeroing)
                   SAM-L = PLL coherent (dot - cross)
                   USB/LSB = product (I channel)
                   CW+/CW- = audio-rate lowpass (255-tap) -> BFO mix (±700 Hz)
-                  RTTY  = dual bandpass (mark/space) -> envelope compare -> Baudot decode
+                  RTTY+/RTTY- = dual bandpass (mark/space) -> envelope compare -> Baudot decode
                   PSK31 = NCO downconvert -> lowpass I/Q -> differential phase -> Varicode decode
              -> [DNR] (spectral gate, STFT overlap-add)
              -> DC removal (smoothed mean subtraction)
@@ -145,7 +145,7 @@ IQ (192 kHz) -> [Noise Blanker] (impulse detection + zeroing)
 
 **CW Morse decoder:** Element classification uses the smoothed dit duration: marks < 2× dit = dit, ≥ 2× dit = dah. Inter-character space detected at > 2.5× dit, inter-word space at > 5× dit. Elements are accumulated per character and decoded via ITU Morse lookup table. Pending characters are flushed after prolonged silence. The decoded text buffer holds the last 120 characters (scrolling).
 
-**RTTY FSK demodulator:** Two 255-tap bandpass FIR filters (80 Hz bandwidth each) isolate the mark (2125 Hz) and space (2295 Hz) tones from the decimated I channel audio. Envelope detection computes the magnitude of each filtered signal. An EMA-smoothed discriminator (mark minus space) makes the bit decision. Clock recovery synchronizes on the start bit (space-to-mark transition at mid-bit), then samples 5 data bits (LSB first) and a stop bit. The 5-bit code is decoded via ITA2/Baudot lookup tables with LTRS/FIGS shift state tracking.
+**RTTY FSK demodulator:** Two 255-tap bandpass FIR filters (80 Hz bandwidth each) isolate the mark (2125 Hz) and space (2295 Hz) tones from the decimated I channel audio. Envelope detection computes the magnitude of each filtered signal. An EMA-smoothed discriminator (mark minus space) makes the bit decision. RTTY- reverses the discriminator polarity for stations using inverted mark/space. Clock recovery synchronizes on the start bit (space-to-mark transition at mid-bit), then samples 5 data bits (LSB first) and a stop bit. The 5-bit code is decoded via ITA2/Baudot lookup tables with LTRS/FIGS shift state tracking. Smoothed mark/space envelope levels (EMA α=0.15) are exposed for the UI tuning indicator.
 
 **BPSK31 demodulator:** A numerically-controlled oscillator (NCO) at 1000 Hz downconverts the decimated I channel audio to baseband I/Q. Both channels are lowpass filtered (127-tap, 100 Hz cutoff). Samples are accumulated over one symbol period (48000/31.25 = 1536 samples). At each symbol boundary, the accumulated I/Q value is compared to the previous symbol using a normalized dot product: positive = same phase (bit 1), negative = phase reversal (bit 0). Bits are accumulated into a Varicode buffer; a `00` sequence signals character completion, and the preceding bits are looked up in a 128-entry decode table (full ASCII). Codes longer than 20 bits without a separator are discarded as noise.
 

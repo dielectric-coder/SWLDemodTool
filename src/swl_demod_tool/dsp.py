@@ -621,6 +621,8 @@ class Demodulator:
         self._rtty_state = "IDLE"      # IDLE, DATA, STOP
         self._rtty_figs_mode = False   # True = figures shift active
         self._rtty_decoded_text = ""
+        self._rtty_mark_level = 0.0    # Smoothed mark envelope (for tuning bar)
+        self._rtty_space_level = 0.0   # Smoothed space envelope (for tuning bar)
         # Mark/space bandpass filters (built on first use or mode switch)
         self._rtty_mark_bp = None
         self._rtty_space_bp = None
@@ -991,7 +993,7 @@ class Demodulator:
         # Detection
         if self.mode in ("CW+", "CW-"):
             detected = self._detect_cw(i_dec, q_dec)
-        elif self.mode == "RTTY":
+        elif self.mode in ("RTTY+", "RTTY-"):
             detected = self._detect_rtty(i_dec, q_dec)
         elif self.mode == "PSK31":
             detected = self._detect_psk31(i_dec, q_dec)
@@ -1402,6 +1404,11 @@ class Demodulator:
         mark_env = np.abs(mark_sig)
         space_env = np.abs(space_sig)
 
+        # Update smoothed mark/space levels for tuning indicator
+        alpha = 0.15  # EMA smoothing factor
+        self._rtty_mark_level = alpha * float(np.mean(mark_env)) + (1 - alpha) * self._rtty_mark_level
+        self._rtty_space_level = alpha * float(np.mean(space_env)) + (1 - alpha) * self._rtty_space_level
+
         # Process each sample: discriminate mark vs space, clock recovery, decode
         samples_per_bit = self._rtty_samples_per_bit
         bit_acc = self._rtty_bit_acc
@@ -1410,6 +1417,9 @@ class Demodulator:
         for k in range(len(audio)):
             # Smoothed discriminator: positive = mark, negative = space
             diff = mark_env[k] - space_env[k]
+            # RTTY- reverses polarity (swap mark/space interpretation)
+            if self.mode == "RTTY-":
+                diff = -diff
             bit_acc = _RTTY_BIT_SMOOTH * bit_acc + (1 - _RTTY_BIT_SMOOTH) * diff
             is_mark = bit_acc > 0
 
@@ -1486,6 +1496,10 @@ class Demodulator:
         """Clear the decoded RTTY text buffer (thread-safe)."""
         with self._lock:
             self._rtty_decoded_text = ""
+
+    def get_rtty_levels(self):
+        """Return smoothed (mark_level, space_level) for tuning indicator."""
+        return self._rtty_mark_level, self._rtty_space_level
 
     def _detect_psk31(self, i_dec, q_dec):
         """BPSK31 detection: downconvert, lowpass, symbol clock recovery, differential decode, Varicode.
@@ -1714,6 +1728,8 @@ class Demodulator:
         self._rtty_bit_count = 0
         self._rtty_state = "IDLE"
         self._rtty_figs_mode = False
+        self._rtty_mark_level = 0.0
+        self._rtty_space_level = 0.0
         self._rtty_mark_bp = None  # Rebuilt on next use
         self._rtty_space_bp = None
         self._rtty_mark_zi = None

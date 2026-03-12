@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.6] - 2026-03-12
+
+### Added
+- **RTTY mark/space tuning indicator**: Dual bar-graph display showing smoothed mark and space tone levels with active tone label (MARK/SPC), similar to the CW tuning indicator. Helps visualize correct tuning and signal quality.
+- **RTTY± polarity modes**: RTTY mode split into RTTY+ (normal, mark low/space high — standard amateur convention) and RTTY- (reversed polarity for commercial/maritime stations). Mode cycle updated: AM → SAM → ... → CW± → RTTY± → PSK31 → DRM.
+
 ## [0.4.5] - 2026-03-12
 
 ### Added

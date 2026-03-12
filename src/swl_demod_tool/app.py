@@ -675,6 +675,20 @@ class DemodApp(App):
             return f"SNR: {snr:2.0f} dB"
         return "SNR: -- dB"
 
+    def _rtty_tuning_bar(self, width=10):
+        """Build a mark/space level indicator for RTTY mode."""
+        mark, space = self.demod.get_rtty_levels()
+        peak = max(mark, space, 1e-12)
+        m_norm = mark / peak
+        s_norm = space / peak
+        m_filled = int(m_norm * width)
+        s_filled = int(s_norm * width)
+        m_bar = "█" * m_filled + "░" * (width - m_filled)
+        s_bar = "█" * s_filled + "░" * (width - s_filled)
+        # Show which tone is active
+        active = "MARK" if mark > space else "SPC " if space > mark else "----"
+        return f"M [{m_bar}]  S [{s_bar}]  {active}"
+
     def _update_mode_info(self):
         w = self.query_one("#mode-info", Static)
         mode = self.demod.mode
@@ -684,9 +698,10 @@ class DemodApp(App):
             if cw_text:
                 t.append(f"\n   {cw_text}")
             w.update(t)
-        elif mode == "RTTY":
+        elif mode in ("RTTY+", "RTTY-"):
             rtty_text = self.demod.get_rtty_text()
-            t = Text(f"   RTTY 45.45 Bd / 170 Hz shift    {self._snr_str()}")
+            polarity = "normal" if mode == "RTTY+" else "reverse"
+            t = Text(f"   {mode} 45.45 Bd / 170 Hz shift ({polarity})    {self._rtty_tuning_bar()}    {self._snr_str()}")
             if rtty_text:
                 t.append(f"\n   {rtty_text}")
             w.update(t)
@@ -901,8 +916,8 @@ class DemodApp(App):
         self._update_audio_info()
 
     def action_cycle_mode(self):
-        """Cycle demodulation mode: AM → SAM → SAM-U → SAM-L → USB → LSB → CW+ → CW- → RTTY → PSK31 → DRM → AM."""
-        modes = ["AM", "SAM", "SAM-U", "SAM-L", "USB", "LSB", "CW+", "CW-", "RTTY", "PSK31", "DRM"]
+        """Cycle demodulation mode: AM → SAM → SAM-U → SAM-L → USB → LSB → CW+ → CW- → RTTY+ → RTTY- → PSK31 → DRM → AM."""
+        modes = ["AM", "SAM", "SAM-U", "SAM-L", "USB", "LSB", "CW+", "CW-", "RTTY+", "RTTY-", "PSK31", "DRM"]
         old_mode = self.demod.mode
         idx = modes.index(old_mode) if old_mode in modes else 0
         new_mode = modes[(idx + 1) % len(modes)]
@@ -921,7 +936,7 @@ class DemodApp(App):
         self.demod.reset()
         self.rit_offset = 0
         # Set default bandwidth for the new mode
-        defaults = {"AM": 5000, "SAM": 5000, "SAM-U": 5000, "SAM-L": 5000, "USB": 2400, "LSB": 2400, "CW+": 500, "CW-": 500, "RTTY": 2400, "PSK31": 500}
+        defaults = {"AM": 5000, "SAM": 5000, "SAM-U": 5000, "SAM-L": 5000, "USB": 2400, "LSB": 2400, "CW+": 500, "CW-": 500, "RTTY+": 2400, "RTTY-": 2400, "PSK31": 500}
         if new_mode in defaults:
             self.demod.set_bandwidth(defaults[new_mode])
         self._update_radio_info()
@@ -1043,7 +1058,7 @@ class DemodApp(App):
             return 1200, 3200, 100
         elif self.demod.mode in ("CW+", "CW-"):
             return 100, 1000, 50
-        elif self.demod.mode == "RTTY":
+        elif self.demod.mode in ("RTTY+", "RTTY-"):
             return 1200, 3200, 100
         elif self.demod.mode == "PSK31":
             return 200, 1000, 50
