@@ -711,6 +711,15 @@ class DemodApp(App):
             if psk_text:
                 t.append(f"\n   {psk_text}")
             w.update(t)
+        elif mode == "MFSK16":
+            mfsk_text = self.demod.get_mfsk_text()
+            tone, conf = self.demod.get_mfsk_tone()
+            tone_str = f"T:{tone:2d}" if tone >= 0 else "T:--"
+            conf_str = f"{conf * 100:2.0f}%" if tone >= 0 else "--%"
+            t = Text(f"   MFSK16 15.625 Bd / 16 tones / 250 Hz    {tone_str} {conf_str}    {self._snr_str()}")
+            if mfsk_text:
+                t.append(f"\n   {mfsk_text}")
+            w.update(t)
         elif mode == "DRM":
             t = self._drm_status_text()
             if t is not None:
@@ -916,8 +925,8 @@ class DemodApp(App):
         self._update_audio_info()
 
     def action_cycle_mode(self):
-        """Cycle demodulation mode: AM → SAM → SAM-U → SAM-L → USB → LSB → CW+ → CW- → RTTY+ → RTTY- → PSK31 → DRM → AM."""
-        modes = ["AM", "SAM", "SAM-U", "SAM-L", "USB", "LSB", "CW+", "CW-", "RTTY+", "RTTY-", "PSK31", "DRM"]
+        """Cycle demodulation mode: AM → SAM → SAM-U → SAM-L → USB → LSB → CW+ → CW- → RTTY+ → RTTY- → PSK31 → MFSK16 → DRM → AM."""
+        modes = ["AM", "SAM", "SAM-U", "SAM-L", "USB", "LSB", "CW+", "CW-", "RTTY+", "RTTY-", "PSK31", "MFSK16", "DRM"]
         old_mode = self.demod.mode
         idx = modes.index(old_mode) if old_mode in modes else 0
         new_mode = modes[(idx + 1) % len(modes)]
@@ -936,7 +945,7 @@ class DemodApp(App):
         self.demod.reset()
         self.rit_offset = 0
         # Set default bandwidth for the new mode
-        defaults = {"AM": 5000, "SAM": 5000, "SAM-U": 5000, "SAM-L": 5000, "USB": 2400, "LSB": 2400, "CW+": 500, "CW-": 500, "RTTY+": 2400, "RTTY-": 2400, "PSK31": 500}
+        defaults = {"AM": 5000, "SAM": 5000, "SAM-U": 5000, "SAM-L": 5000, "USB": 2400, "LSB": 2400, "CW+": 500, "CW-": 500, "RTTY+": 2400, "RTTY-": 2400, "PSK31": 500, "MFSK16": 500}
         if new_mode in defaults:
             self.demod.set_bandwidth(defaults[new_mode])
         self._update_radio_info()
@@ -947,6 +956,7 @@ class DemodApp(App):
         self.demod.clear_cw_text()
         self.demod.clear_rtty_text()
         self.demod.clear_psk_text()
+        self.demod.clear_mfsk_text()
 
     def action_toggle_nb(self):
         self.demod.nb_enabled = not self.demod.nb_enabled
@@ -1061,6 +1071,8 @@ class DemodApp(App):
         elif self.demod.mode in ("RTTY+", "RTTY-"):
             return 1200, 3200, 100
         elif self.demod.mode == "PSK31":
+            return 200, 1000, 50
+        elif self.demod.mode == "MFSK16":
             return 200, 1000, 50
         return 100, 24000, 500  # fallback
 

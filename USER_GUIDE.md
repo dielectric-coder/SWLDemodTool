@@ -69,7 +69,7 @@ The app auto-connects on startup to `localhost:4533` (IQ) and `localhost:4532` (
 | `r`             | Reconnect                           |
 | `m`             | Toggle mute                         |
 | `a`             | Toggle AGC                          |
-| `x`             | Cycle mode (AM → SAM → ... → CW± → RTTY± → PSK31 → DRM) |
+| `x`             | Cycle mode (AM → SAM → ... → CW± → RTTY± → PSK31 → MFSK16 → DRM) |
 | `v`             | Toggle VFO (A ↔ B)                  |
 | `+` / `-`       | Volume up / down                    |
 | `]` / `[`       | Increase / decrease demod bandwidth |
@@ -121,6 +121,8 @@ A dedicated panel below the audio info displays mode-specific indicators:
 
 **PSK31 mode:** Baud rate, SNR, and live decoded Varicode text.
 
+**MFSK16 mode:** Baud rate, tone count, bandwidth, detected tone index with confidence, SNR, and live decoded MFSK Varicode text.
+
 **SAM modes:** PLL tracking offset in Hz.
 
 **SSB modes (USB/LSB):** RIT offset.
@@ -149,6 +151,7 @@ A dedicated panel below the audio info displays mode-specific indicators:
 | RTTY+ | FSK (mark/space, normal) | Radio Teletype, 45.45 Bd, 170 Hz shift, Baudot |
 | RTTY- | FSK (mark/space, reverse) | Radio Teletype, reversed polarity |
 | PSK31 | BPSK differential       | Phase Shift Keying, 31.25 Bd, Varicode |
+| MFSK16| 16-tone FSK + Viterbi FEC | Multi-FSK, 15.625 Bd, MFSK Varicode |
 | DRM   | Dream decoder | Digital Radio Mondiale, requires Dream binary |
 
 ### SAM and ECSS
@@ -176,6 +179,14 @@ The mode info panel shows a mark/space tuning indicator with bar graphs for each
 ### PSK31 Mode
 
 PSK31 (BPSK31) demodulates Phase Shift Keying signals at 31.25 baud. The audio signal is downconverted to baseband at the carrier frequency (~1000 Hz), lowpass filtered, and accumulated over each symbol period. Differential phase detection compares consecutive symbols: same phase = 1, phase reversal = 0. Characters are decoded using Varicode (variable-length codes where common characters like 'e' and space have the shortest codes, separated by two consecutive zeros). Default bandwidth is 500 Hz (adjustable 200-1000 Hz). Decoded text appears in the mode info panel; press `t` to clear.
+
+### MFSK16 Mode
+
+MFSK16 (Multi-Frequency Shift Keying, 16 tones) demodulates signals at 15.625 baud using 16 orthogonal tones spaced 15.625 Hz apart (250 Hz total bandwidth). Each symbol encodes 4 bits via Gray-coded tone selection. The signal is protected by a K=7 R=1/2 convolutional code (Viterbi soft-decision decoding) with convolutional interleaving, providing robust performance on HF fading channels. Characters are decoded using the IZ8BLY MFSK Varicode (variable-length codes with `001` delimiter). Default bandwidth is 500 Hz (adjustable 200-1000 Hz). Decoded text appears in the mode info panel; press `t` to clear.
+
+The mode info panel shows the detected tone index, tone confidence percentage, SNR, and live decoded text. The Viterbi decoder needs approximately 30 symbols (~2 seconds) of warmup before producing output.
+
+MFSK16 is commonly used on HF for keyboard-to-keyboard QSOs and is popular for its strong error correction and resistance to multipath fading. It is supported by fldigi and other amateur radio software.
 
 ### RIT (Receiver Incremental Tuning)
 

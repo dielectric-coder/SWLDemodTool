@@ -8,7 +8,7 @@ src/swl_demod_tool/
     app.py            # Textual TUI application (entry point: main())
     iq_client.py      # TCP client for IQ sample stream
     cat_client.py     # TCP client for CAT radio control
-    dsp.py            # DSP: FFT spectrum, sparkline rendering, AM/SSB/CW/RTTY/PSK31 demodulator, noise reduction
+    dsp.py            # DSP: FFT spectrum, sparkline rendering, AM/SSB/CW/RTTY/PSK31/MFSK16 demodulator, noise reduction
     drm.py            # DRM decoder integration (Dream subprocess)
     audio.py          # Audio output via sounddevice with ring buffer
     config.py         # INI config file handling
@@ -104,7 +104,7 @@ Mode codes in IF response (char 29): 1=LSB, 2=USB, 3=CW, 4=FM, 5=AM, 7=CW-R
 - Peak-hold downsampling (max per display bin) to preserve narrow signals
 - Multi-row Unicode block character rendering
 
-**AM/SAM/SSB/CW/RTTY/PSK31 demodulation:**
+**AM/SAM/SSB/CW/RTTY/PSK31/MFSK16 demodulation:**
 ```
 IQ (192 kHz) -> [Noise Blanker] (impulse detection + zeroing)
              -> FIR lowpass (127-tap, scipy firwin)
@@ -119,6 +119,7 @@ IQ (192 kHz) -> [Noise Blanker] (impulse detection + zeroing)
                   CW+/CW- = audio-rate lowpass (255-tap) -> BFO mix (±700 Hz)
                   RTTY+/RTTY- = dual bandpass (mark/space) -> envelope compare -> Baudot decode
                   PSK31 = NCO downconvert -> lowpass I/Q -> differential phase -> Varicode decode
+                  MFSK16 = FFT tone detect -> soft decode -> convolutional interleaver -> Viterbi -> MFSK Varicode
              -> [DNR] (spectral gate, STFT overlap-add)
              -> DC removal (smoothed mean subtraction)
              -> AGC (block-based, fast attack / slow decay)
@@ -148,6 +149,8 @@ IQ (192 kHz) -> [Noise Blanker] (impulse detection + zeroing)
 **RTTY FSK demodulator:** Two 255-tap bandpass FIR filters (80 Hz bandwidth each) isolate the mark (2125 Hz) and space (2295 Hz) tones from the decimated I channel audio. Envelope detection computes the magnitude of each filtered signal. An EMA-smoothed discriminator (mark minus space) makes the bit decision. RTTY- reverses the discriminator polarity for stations using inverted mark/space. Clock recovery synchronizes on the start bit (space-to-mark transition at mid-bit), then samples 5 data bits (LSB first) and a stop bit. The 5-bit code is decoded via ITA2/Baudot lookup tables with LTRS/FIGS shift state tracking. Smoothed mark/space envelope levels (EMA α=0.15) are exposed for the UI tuning indicator.
 
 **BPSK31 demodulator:** A numerically-controlled oscillator (NCO) at 1000 Hz downconverts the decimated I channel audio to baseband I/Q. Both channels are lowpass filtered (127-tap, 100 Hz cutoff). Samples are accumulated over one symbol period (48000/31.25 = 1536 samples). At each symbol boundary, the accumulated I/Q value is compared to the previous symbol using a normalized dot product: positive = same phase (bit 1), negative = phase reversal (bit 0). Bits are accumulated into a Varicode buffer; a `00` sequence signals character completion, and the preceding bits are looked up in a 128-entry decode table (full ASCII). Codes longer than 20 bits without a separator are discarded as noise.
+
+**MFSK16 demodulator:** 16-tone FSK at 15.625 baud (15.625 Hz tone spacing, orthogonal signaling). Each symbol carries 4 bits (Gray-coded tone index). A 3072-sample symbol buffer (64 ms at 48 kHz) feeds an FFT for tone detection. Soft-decision bits are computed as weighted sums of all tone magnitudes (fldigi softdecode). A fldigi-compatible convolutional interleaver (3D table, size=4, depth=10, REV direction with main-diagonal extraction) de-interleaves the soft symbols. A K=7 R=1/2 soft-decision Viterbi decoder (polynomials 0x6d/0x4f, traceback depth 20) recovers data bits. Characters are decoded using the IZ8BLY MFSK Varicode table (variable-length codes with `001` delimiter, 256-entry table). Default bandwidth 500 Hz (adjustable 200-1000 Hz).
 
 **Audio Peak Filter (APF):** A biquad IIR bandpass filter (Q=15, ~50 Hz bandwidth) centered on the CW BFO frequency (700 Hz). Applied post-detection in CW modes when enabled. Helps isolate a single CW signal in a crowded band by suppressing adjacent signals.
 
@@ -185,6 +188,9 @@ Dream binary auto-detection order: configured path, `../DRM/dream-2.2/dream`, `P
 | Decimation factor | 4       | `dsp.py`      |
 | AGC target RMS    | 0.3     | `dsp.py`      |
 | IQ chunk size     | 12288 B | `iq_client.py`|
+| MFSK16 tones      | 16      | `dsp.py`      |
+| MFSK16 baud       | 15.625  | `dsp.py`      |
+| MFSK16 Viterbi    | K=7 R=1/2| `dsp.py`     |
 | Audio buffer      | 1 sec   | `audio.py`    |
 | DRM status socket   | Unix  | `drm.py`      |
 

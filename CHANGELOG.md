@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.4.7] - 2026-03-12
+
+### Added
+- **MFSK16 demodulation mode**: 16-tone FSK demodulator with K=7 R=1/2 convolutional FEC (Viterbi soft-decision decoding) and IZ8BLY MFSK Varicode. FFT-based tone detection (3072 samples/symbol at 48 kHz), fldigi-compatible convolutional interleaver (size=4, depth=10), and variable-length Varicode character decoding. Live decoded text in mode info panel. Mode cycle updated: AM → SAM → ... → CW± → RTTY± → PSK31 → MFSK16 → DRM.
+
 ## [0.4.6] - 2026-03-12
 
 ### Added

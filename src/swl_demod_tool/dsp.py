@@ -139,6 +139,73 @@ _PSK31_FILTER_BW = 100.0       # Bandpass filter half-bandwidth (Hz)
 _PSK31_PLL_ALPHA = 0.03        # Carrier PLL proportional gain
 _PSK31_PLL_BETA = 0.002        # Carrier PLL integrator gain
 
+# MFSK16 constants
+_MFSK16_TONES = 16
+_MFSK16_SYMBITS = 4            # Bits per symbol (log2(16))
+_MFSK16_SPACING = 15.625       # Hz between tones (= baud rate for orthogonal FSK)
+_MFSK16_BAUD = 15.625          # Symbols/sec
+_MFSK16_CENTER = 1500.0        # Nominal center audio frequency (Hz)
+_MFSK16_INTLV_DEPTH = 10       # Interleaver depth (symbols)
+
+# Viterbi K=7 R=1/2 convolutional FEC (used by MFSK16)
+_VITERBI_K = 7
+_VITERBI_NSTATES = 64          # 2^(K-1)
+_VITERBI_POLY1 = 0x6d          # Generator polynomial 1
+_VITERBI_POLY2 = 0x4f          # Generator polynomial 2
+_VITERBI_TRACEBACK = 20        # Traceback depth (shorter = faster convergence)
+
+# Precompute Viterbi transition and output tables at module load
+_VITERBI_NEXT = np.zeros((_VITERBI_NSTATES, 2), dtype=np.int32)
+_VITERBI_OUT = np.zeros((_VITERBI_NSTATES, 2, 2), dtype=np.int32)
+for _s in range(_VITERBI_NSTATES):
+    for _d in range(2):
+        _reg = (_s << 1) | _d
+        _VITERBI_NEXT[_s, _d] = _reg & (_VITERBI_NSTATES - 1)
+        _VITERBI_OUT[_s, _d, 0] = bin(_reg & _VITERBI_POLY1).count('1') % 2
+        _VITERBI_OUT[_s, _d, 1] = bin(_reg & _VITERBI_POLY2).count('1') % 2
+
+# IZ8BLY MFSK Varicode table — maps character index to bit pattern
+# Decoded via shift register: bits shift in MSB-first, '001' delimiter triggers lookup
+# From fldigi src/mfsk/MFSKvaricode.cxx
+_MFSK_VARICODE = [
+    0x75C, 0x760, 0x768, 0x76C, 0x770, 0x774, 0x778, 0x77C,
+    0x0A8, 0x780, 0x7A0, 0x7A8, 0x7AC, 0x0AC, 0x7B0, 0x7B4,
+    0x7B8, 0x7BC, 0x7C0, 0x7D0, 0x7D4, 0x7D8, 0x7DC, 0x7E0,
+    0x7E8, 0x7EC, 0x7F0, 0x7F4, 0x7F8, 0x7FC, 0x800, 0xA00,
+    0x004, 0x1C0, 0x1FC, 0x2D8, 0x2A8, 0x2A0, 0x200, 0x1BC,
+    0x1F4, 0x1F0, 0x2B4, 0x1E0, 0x0A0, 0x1D8, 0x1D4, 0x1E8,
+    0x0E0, 0x0F0, 0x140, 0x154, 0x174, 0x160, 0x16C, 0x1A0,
+    0x180, 0x1AC, 0x1EC, 0x1F8, 0x2C0, 0x1DC, 0x2BC, 0x1D0,
+    0x280, 0x0BC, 0x100, 0x0D4, 0x0DC, 0x0B8, 0x0F8, 0x150,
+    0x158, 0x0C0, 0x1B4, 0x17C, 0x0F4, 0x0E8, 0x0FC, 0x0D0,
+    0x0EC, 0x1B0, 0x0D8, 0x0B4, 0x0B0, 0x15C, 0x1A8, 0x168,
+    0x170, 0x178, 0x1B8, 0x2E8, 0x2D0, 0x2EC, 0x2D4, 0x2B0,
+    0x2AC, 0x014, 0x060, 0x038, 0x034, 0x008, 0x050, 0x058,
+    0x030, 0x018, 0x080, 0x070, 0x02C, 0x040, 0x01C, 0x010,
+    0x054, 0x078, 0x020, 0x028, 0x00C, 0x03C, 0x06C, 0x068,
+    0x074, 0x05C, 0x07C, 0x2DC, 0x2B8, 0x2E0, 0x2F0, 0xA80,
+    0xAA0, 0xAA8, 0xAAC, 0xAB0, 0xAB4, 0xAB8, 0xABC, 0xAC0,
+    0xAD0, 0xAD4, 0xAD8, 0xADC, 0xAE0, 0xAE8, 0xAEC, 0xAF0,
+    0xAF4, 0xAF8, 0xAFC, 0xB00, 0xB40, 0xB50, 0xB54, 0xB58,
+    0xB5C, 0xB60, 0xB68, 0xB6C, 0xB70, 0xB74, 0xB78, 0xB7C,
+    0x2F4, 0x2F8, 0x2FC, 0x300, 0x340, 0x350, 0x354, 0x358,
+    0x35C, 0x360, 0x368, 0x36C, 0x370, 0x374, 0x378, 0x37C,
+    0x380, 0x3A0, 0x3A8, 0x3AC, 0x3B0, 0x3B4, 0x3B8, 0x3BC,
+    0x3C0, 0x3D0, 0x3D4, 0x3D8, 0x3DC, 0x3E0, 0x3E8, 0x3EC,
+    0x3F0, 0x3F4, 0x3F8, 0x3FC, 0x400, 0x500, 0x540, 0x550,
+    0x554, 0x558, 0x55C, 0x560, 0x568, 0x56C, 0x570, 0x574,
+    0x578, 0x57C, 0x580, 0x5A0, 0x5A8, 0x5AC, 0x5B0, 0x5B4,
+    0x5B8, 0x5BC, 0x5C0, 0x5D0, 0x5D4, 0x5D8, 0x5DC, 0x5E0,
+    0x5E8, 0x5EC, 0x5F0, 0x5F4, 0x5F8, 0x5FC, 0x600, 0x680,
+    0x6A0, 0x6A8, 0x6AC, 0x6B0, 0x6B4, 0x6B8, 0x6BC, 0x6C0,
+    0x6D0, 0x6D4, 0x6D8, 0x6DC, 0x6E0, 0x6E8, 0x6EC, 0x6F0,
+    0x6F4, 0x6F8, 0x6FC, 0x700, 0x740, 0x750, 0x754, 0x758,
+]
+# Build reverse lookup: varicode pattern → character
+_MFSK_VARIDEC = {}
+for _i, _v in enumerate(_MFSK_VARICODE):
+    _MFSK_VARIDEC[_v] = _i
+
 # RTTY constants
 _RTTY_MARK_HZ = 2125.0        # Mark tone frequency (Hz)
 _RTTY_SHIFT_HZ = 170.0        # Frequency shift (Hz), space = mark + shift
@@ -650,6 +717,28 @@ class Demodulator:
         self._psk_q_acc = 0.0
         self._psk_acc_count = 0
 
+        # MFSK16 demodulator state
+        self._mfsk_samples_per_sym = int(self.audio_rate / _MFSK16_BAUD)  # 3072
+        self._mfsk_sym_buf = np.zeros(self._mfsk_samples_per_sym, dtype=np.float32)
+        self._mfsk_sym_pos = 0
+        self._mfsk_base_freq = _MFSK16_CENTER - (_MFSK16_TONES - 1) / 2 * _MFSK16_SPACING
+        # fldigi-style convolutional interleaver: 3D table [depth][size][size]
+        self._mfsk_intlv_table = np.full(
+            (_MFSK16_INTLV_DEPTH, _MFSK16_SYMBITS, _MFSK16_SYMBITS),
+            128, dtype=np.uint8)  # 128 = erasure for soft Viterbi
+        # Soft-decision Viterbi decoder state
+        self._mfsk_viterbi_metrics = np.full(_VITERBI_NSTATES, -(1 << 30), dtype=np.int64)
+        self._mfsk_viterbi_metrics[0] = 0
+        self._mfsk_viterbi_history = []
+        # Soft symbol pair accumulator and varicode shift register
+        self._mfsk_soft_pair = [128, 128]
+        self._mfsk_soft_toggle = 0
+        self._mfsk_datashreg = 1        # Varicode shift register (delimiter = '001')
+        self._mfsk_decoded_text = ""
+        # Tone tracking for UI
+        self._mfsk_tone_idx = -1
+        self._mfsk_tone_confidence = 0.0
+
     def _update_cw_filter(self):
         """Rebuild the post-decimation audio-rate lowpass for CW modes."""
         self._cw_taps, self._cw_zi_i = _make_filter(255, self.bandwidth, self.audio_rate)
@@ -997,6 +1086,8 @@ class Demodulator:
             detected = self._detect_rtty(i_dec, q_dec)
         elif self.mode == "PSK31":
             detected = self._detect_psk31(i_dec, q_dec)
+        elif self.mode == "MFSK16":
+            detected = self._detect_mfsk16(i_dec, q_dec)
         elif self.mode in ("USB", "LSB"):
             detected = i_dec.astype(np.float32)
         elif self.mode in ("SAM", "SAM-U", "SAM-L"):
@@ -1601,6 +1692,171 @@ class Demodulator:
         with self._lock:
             self._psk_decoded_text = ""
 
+    def _detect_mfsk16(self, i_dec, q_dec):
+        """MFSK16 detection: 16-tone FSK with K=7 R=1/2 FEC and IZ8BLY Varicode.
+
+        Accumulates samples over symbol period (64 ms), detects tones via FFT,
+        computes soft-decision bits, de-interleaves (fldigi convolutional),
+        and Viterbi-decodes to produce ASCII text via MFSK Varicode.
+        """
+        audio = i_dec.astype(np.float32)
+        pos = 0
+        n_sym = self._mfsk_samples_per_sym
+        while pos < len(audio):
+            take = min(n_sym - self._mfsk_sym_pos, len(audio) - pos)
+            self._mfsk_sym_buf[self._mfsk_sym_pos:self._mfsk_sym_pos + take] = audio[pos:pos + take]
+            self._mfsk_sym_pos += take
+            pos += take
+            if self._mfsk_sym_pos >= n_sym:
+                self._mfsk_sym_pos = 0
+                self._mfsk_process_symbol()
+        return audio
+
+    def _mfsk_process_symbol(self):
+        """Process one MFSK16 symbol: FFT → soft decode → interleave → Viterbi → Varicode."""
+        n = self._mfsk_samples_per_sym  # 3072
+        symbits = _MFSK16_SYMBITS       # 4
+
+        # FFT tone detection — use symbol-length FFT (no zero-pad, matches fldigi)
+        spec = np.abs(np.fft.fft(self._mfsk_sym_buf, n=n))
+
+        # Tone bins: base_bin + i for i in 0..15
+        # At 48 kHz with n=3072: bin spacing = 15.625 Hz = tone spacing, stride = 1
+        bin_hz = self.audio_rate / n
+        base_bin = int(round(self._mfsk_base_freq / bin_hz))
+        stride = max(1, int(round(_MFSK16_SPACING / bin_hz)))
+        tone_mags = np.array([spec[base_bin + i * stride]
+                              for i in range(_MFSK16_TONES)])
+
+        tone_idx = int(np.argmax(tone_mags))
+        total = float(np.sum(tone_mags))
+        if total < 1e-10:
+            total = 1e-10
+        self._mfsk_tone_confidence = float(tone_mags[tone_idx] / total)
+        self._mfsk_tone_idx = tone_idx
+
+        # Soft decode: weighted sum across all tones (fldigi softdecode)
+        b = np.zeros(symbits, dtype=np.float64)
+        for i in range(_MFSK16_TONES):
+            gray = i ^ (i >> 1)  # Gray decode: index → binary
+            mag = float(tone_mags[i])
+            for k in range(symbits):
+                if gray & (1 << (symbits - k - 1)):
+                    b[k] += mag
+                else:
+                    b[k] -= mag
+
+        # Convert to 0-255 soft symbols (128 = erasure/unknown)
+        syms = np.zeros(symbits, dtype=np.uint8)
+        for i in range(symbits):
+            soft = 128.0 + (b[i] / total) * 256.0
+            syms[i] = int(np.clip(soft, 0, 255))
+
+        # De-interleave: fldigi convolutional interleaver (REV direction)
+        self._mfsk_interleave_rev(syms)
+
+        # Feed soft symbols to Viterbi in pairs
+        for i in range(symbits):
+            self._mfsk_soft_pair[0] = self._mfsk_soft_pair[1]
+            self._mfsk_soft_pair[1] = int(syms[i])
+            self._mfsk_soft_toggle = 0 if self._mfsk_soft_toggle else 1
+            if self._mfsk_soft_toggle:
+                continue
+            bit = self._mfsk_viterbi_step(self._mfsk_soft_pair[0],
+                                          self._mfsk_soft_pair[1])
+            if bit < 0:
+                continue
+            # Varicode decode: shift in bit, check for '001' delimiter
+            self._mfsk_datashreg = (self._mfsk_datashreg << 1) | bit
+            if (self._mfsk_datashreg & 7) == 1:
+                code = self._mfsk_datashreg >> 1
+                ch_idx = _MFSK_VARIDEC.get(code, -1)
+                if ch_idx >= 0:
+                    ch = chr(ch_idx) if ch_idx not in (10, 13) else ' '
+                    with self._lock:
+                        self._mfsk_decoded_text += ch
+                        if len(self._mfsk_decoded_text) > 120:
+                            self._mfsk_decoded_text = self._mfsk_decoded_text[-120:]
+                self._mfsk_datashreg = 1
+
+    def _mfsk_interleave_rev(self, syms):
+        """fldigi convolutional interleaver (REV direction, in-place).
+
+        Uses a 3D table [depth][size][size] with main-diagonal extraction.
+        Each depth stage shifts rows left, inserts new symbols at the right
+        edge, then reads from the main diagonal (table[k][i][i]).
+        """
+        size = _MFSK16_SYMBITS
+        tbl = self._mfsk_intlv_table
+        for k in range(_MFSK16_INTLV_DEPTH):
+            for i in range(size):
+                tbl[k, i, :-1] = tbl[k, i, 1:]
+            for i in range(size):
+                tbl[k, i, size - 1] = syms[i]
+            for i in range(size):
+                syms[i] = tbl[k, i, i]
+
+    def _mfsk_viterbi_step(self, s0, s1):
+        """One step of K=7 R=1/2 soft-decision Viterbi decoding.
+
+        Soft symbols: 0=strong zero, 128=erasure, 255=strong one.
+        Returns decoded bit (0 or 1) when traceback depth is reached, else -1.
+        """
+        nstates = _VITERBI_NSTATES
+        new_met = np.full(nstates, -(1 << 30), dtype=np.int64)
+        decisions = np.zeros(nstates, dtype=np.int32)
+
+        for state in range(nstates):
+            if self._mfsk_viterbi_metrics[state] <= -(1 << 29):
+                continue
+            for inp in range(2):
+                ns = int(_VITERBI_NEXT[state, inp])
+                e0 = int(_VITERBI_OUT[state, inp, 0])
+                e1 = int(_VITERBI_OUT[state, inp, 1])
+                # Soft branch metric: correlation of received vs expected
+                bm0 = 0 if s0 == 128 else ((s0 - 128) if e0 else (128 - s0))
+                bm1 = 0 if s1 == 128 else ((s1 - 128) if e1 else (128 - s1))
+                m = int(self._mfsk_viterbi_metrics[state]) + bm0 + bm1
+                if m > new_met[ns]:
+                    new_met[ns] = m
+                    decisions[ns] = state
+
+        self._mfsk_viterbi_metrics = new_met
+        self._mfsk_viterbi_history.append(decisions.copy())
+
+        if len(self._mfsk_viterbi_history) > _VITERBI_TRACEBACK:
+            return self._mfsk_viterbi_traceback()
+        return -1
+
+    def _mfsk_viterbi_traceback(self):
+        """Traceback one bit from the Viterbi trellis."""
+        best = int(np.argmax(self._mfsk_viterbi_metrics))
+        state = best
+        for t in range(len(self._mfsk_viterbi_history) - 1, 0, -1):
+            state = int(self._mfsk_viterbi_history[t][state])
+        prev = int(self._mfsk_viterbi_history[0][state])
+        bit = 0
+        for inp in range(2):
+            if _VITERBI_NEXT[prev, inp] == state:
+                bit = inp
+                break
+        self._mfsk_viterbi_history.pop(0)
+        return bit
+
+    def get_mfsk_text(self):
+        """Return the decoded MFSK16 text buffer."""
+        with self._lock:
+            return self._mfsk_decoded_text
+
+    def clear_mfsk_text(self):
+        """Clear the decoded MFSK16 text buffer (thread-safe)."""
+        with self._lock:
+            self._mfsk_decoded_text = ""
+
+    def get_mfsk_tone(self):
+        """Return (tone_index, confidence) for MFSK16 display."""
+        return self._mfsk_tone_idx, self._mfsk_tone_confidence
+
     def get_cw_text(self):
         """Return the decoded CW text buffer."""
         with self._lock:
@@ -1745,9 +2001,22 @@ class Demodulator:
         self._psk_acc_count = 0
         self._psk_lp_zi_i = np.zeros(126, dtype=np.float32)
         self._psk_lp_zi_q = np.zeros(126, dtype=np.float32)
+        # Reset MFSK16 state
+        self._mfsk_sym_buf[:] = 0
+        self._mfsk_sym_pos = 0
+        self._mfsk_intlv_table[:] = 128
+        self._mfsk_viterbi_metrics = np.full(_VITERBI_NSTATES, -(1 << 30), dtype=np.int64)
+        self._mfsk_viterbi_metrics[0] = 0
+        self._mfsk_viterbi_history = []
+        self._mfsk_soft_pair = [128, 128]
+        self._mfsk_soft_toggle = 0
+        self._mfsk_datashreg = 1
+        self._mfsk_tone_idx = -1
+        self._mfsk_tone_confidence = 0.0
         with self._lock:
             self._rtty_decoded_text = ""
             self._psk_decoded_text = ""
+            self._mfsk_decoded_text = ""
         if self._cw_taps is not None:
             self._cw_taps, self._cw_zi_i = _make_filter(255, self.bandwidth, self.audio_rate)
             _, self._cw_zi_q = _make_filter(255, self.bandwidth, self.audio_rate)
