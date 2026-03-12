@@ -133,7 +133,7 @@ _VARICODE_ENC = {
 _VARICODE_DEC = {v: k for k, v in _VARICODE_ENC.items()}
 
 # PSK31 constants
-_PSK31_CARRIER_HZ = 1000.0    # Nominal audio carrier frequency
+_PSK31_CARRIER_HZ = 1500.0    # Nominal audio carrier frequency
 _PSK31_BAUD = 31.25            # Symbol rate
 _PSK31_FILTER_BW = 100.0       # Bandpass filter half-bandwidth (Hz)
 _PSK31_PLL_ALPHA = 0.03        # Carrier PLL proportional gain
@@ -153,6 +153,14 @@ _VITERBI_NSTATES = 64          # 2^(K-1)
 _VITERBI_POLY1 = 0x6d          # Generator polynomial 1
 _VITERBI_POLY2 = 0x4f          # Generator polynomial 2
 _VITERBI_TRACEBACK = 20        # Traceback depth (shorter = faster convergence)
+
+# Precompute Gray decode table for MFSK16 tone-index → data-bits mapping
+_GRAY_DECODE = np.zeros(_MFSK16_TONES, dtype=np.int32)
+for _g in range(_MFSK16_TONES):
+    _n = _g
+    _n ^= _n >> 2
+    _n ^= _n >> 1
+    _GRAY_DECODE[_g] = _n
 
 # Precompute Viterbi transition and output tables at module load
 _VITERBI_NEXT = np.zeros((_VITERBI_NSTATES, 2), dtype=np.int32)
@@ -722,10 +730,17 @@ class Demodulator:
         self._mfsk_sym_buf = np.zeros(self._mfsk_samples_per_sym, dtype=np.float32)
         self._mfsk_sym_pos = 0
         self._mfsk_base_freq = _MFSK16_CENTER - (_MFSK16_TONES - 1) / 2 * _MFSK16_SPACING
-        # fldigi-style convolutional interleaver: 3D table [depth][size][size]
-        self._mfsk_intlv_table = np.full(
-            (_MFSK16_INTLV_DEPTH, _MFSK16_SYMBITS, _MFSK16_SYMBITS),
-            128, dtype=np.uint8)  # 128 = erasure for soft Viterbi
+        # fldigi-style convolutional interleaver: per-column FIFO delay lines
+        # Reverse direction: column i has delay (SIZE-1-i) * DEPTH
+        self._mfsk_intlv_bufs = []
+        self._mfsk_intlv_ptrs = []
+        self._mfsk_intlv_lens = []
+        for i in range(_MFSK16_SYMBITS):
+            length = (_MFSK16_SYMBITS - 1 - i) * _MFSK16_INTLV_DEPTH
+            self._mfsk_intlv_bufs.append(
+                np.full(length, 128, dtype=np.uint8) if length > 0 else None)
+            self._mfsk_intlv_ptrs.append(0)
+            self._mfsk_intlv_lens.append(length)
         # Soft-decision Viterbi decoder state
         self._mfsk_viterbi_metrics = np.full(_VITERBI_NSTATES, -(1 << 30), dtype=np.int64)
         self._mfsk_viterbi_metrics[0] = 0
@@ -1738,7 +1753,7 @@ class Demodulator:
         # Soft decode: weighted sum across all tones (fldigi softdecode)
         b = np.zeros(symbits, dtype=np.float64)
         for i in range(_MFSK16_TONES):
-            gray = i ^ (i >> 1)  # Gray decode: index → binary
+            gray = int(_GRAY_DECODE[i])  # Gray decode: tone index → data bits
             mag = float(tone_mags[i])
             for k in range(symbits):
                 if gray & (1 << (symbits - k - 1)):
@@ -1782,19 +1797,19 @@ class Demodulator:
     def _mfsk_interleave_rev(self, syms):
         """fldigi convolutional interleaver (REV direction, in-place).
 
-        Uses a 3D table [depth][size][size] with main-diagonal extraction.
-        Each depth stage shifts rows left, inserts new symbols at the right
-        edge, then reads from the main diagonal (table[k][i][i]).
+        Each column i passes through a FIFO delay line of length
+        (SIZE-1-i) * DEPTH, matching fldigi's interleave implementation.
         """
-        size = _MFSK16_SYMBITS
-        tbl = self._mfsk_intlv_table
-        for k in range(_MFSK16_INTLV_DEPTH):
-            for i in range(size):
-                tbl[k, i, :-1] = tbl[k, i, 1:]
-            for i in range(size):
-                tbl[k, i, size - 1] = syms[i]
-            for i in range(size):
-                syms[i] = tbl[k, i, i]
+        for i in range(_MFSK16_SYMBITS):
+            length = self._mfsk_intlv_lens[i]
+            if length == 0:
+                continue
+            buf = self._mfsk_intlv_bufs[i]
+            ptr = self._mfsk_intlv_ptrs[i]
+            out = buf[ptr]
+            buf[ptr] = syms[i]
+            self._mfsk_intlv_ptrs[i] = (ptr + 1) % length
+            syms[i] = out
 
     def _mfsk_viterbi_step(self, s0, s1):
         """One step of K=7 R=1/2 soft-decision Viterbi decoding.
@@ -2004,7 +2019,10 @@ class Demodulator:
         # Reset MFSK16 state
         self._mfsk_sym_buf[:] = 0
         self._mfsk_sym_pos = 0
-        self._mfsk_intlv_table[:] = 128
+        for i in range(_MFSK16_SYMBITS):
+            if self._mfsk_intlv_bufs[i] is not None:
+                self._mfsk_intlv_bufs[i][:] = 128
+            self._mfsk_intlv_ptrs[i] = 0
         self._mfsk_viterbi_metrics = np.full(_VITERBI_NSTATES, -(1 << 30), dtype=np.int64)
         self._mfsk_viterbi_metrics[0] = 0
         self._mfsk_viterbi_history = []

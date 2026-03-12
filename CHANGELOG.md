@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.8] - 2026-03-12
+
+### Fixed
+- **PSK31 carrier frequency**: Changed NCO from 1000 Hz to 1500 Hz to match the standard audio offset convention used by fldigi and other PSK software. Previously required tuning +500 Hz above the published dial frequency.
+- **MFSK16 deinterleaver**: Replaced incorrect cascaded 3D table deinterleaver with correct FIFO delay lines matching fldigi's convolutional interleaver (per-column delays of (SIZE-1-i) × DEPTH).
+- **MFSK16 Gray decode**: Fixed soft-decision tone mapping — was using Gray encode (`i ^ (i >> 1)`) instead of Gray decode. Tones 4–15 mapped to wrong bit patterns, causing periodic decode failures depending on tone usage.
+
 ## [0.4.7] - 2026-03-12
 
 ### Added
