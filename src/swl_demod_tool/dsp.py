@@ -5,6 +5,32 @@ import threading
 import numpy as np
 from scipy.signal import firwin, lfilter
 
+# ---------------------------------------------------------------------------
+# Optional accelerators: pyfftw (faster FFT) and numba (JIT for hot loops)
+# Both fall back gracefully if not installed.
+# ---------------------------------------------------------------------------
+try:
+    import pyfftw
+    pyfftw.interfaces.cache.enable()
+    pyfftw.interfaces.cache.set_keepalive_time(60)
+    _fft = pyfftw.interfaces.numpy_fft.fft
+    _ifft = pyfftw.interfaces.numpy_fft.ifft
+    _rfft = pyfftw.interfaces.numpy_fft.rfft
+    _irfft = pyfftw.interfaces.numpy_fft.irfft
+    _fftshift = np.fft.fftshift  # fftshift is just index reordering, no speedup
+except ImportError:
+    _fft = np.fft.fft
+    _ifft = np.fft.ifft
+    _rfft = np.fft.rfft
+    _irfft = np.fft.irfft
+    _fftshift = np.fft.fftshift
+
+try:
+    import numba
+    _HAS_NUMBA = True
+except ImportError:
+    _HAS_NUMBA = False
+
 # International Morse Code lookup: dit/dah sequence -> character
 _MORSE_TABLE = {
     ".-": "A", "-...": "B", "-.-.": "C", "-..": "D", ".": "E",
@@ -124,6 +150,212 @@ _RTTY_BIT_SMOOTH = 0.3         # EMA smoothing for mark/space discriminator
 _blackman_cache = {}
 
 
+# ---------------------------------------------------------------------------
+# Numba-accelerated inner loops (fall back to plain Python if unavailable)
+# ---------------------------------------------------------------------------
+
+def _nb_loop_py(mag, iq_samples, out, threshold, avg, holdoff, delay_buf,
+                lookahead, ema_alpha, holdoff_ext):
+    """Pure-Python noise blanker inner loop."""
+    n = len(mag)
+    for i in range(n):
+        if mag[i] < threshold * avg or avg < 1e-15:
+            avg += ema_alpha * (mag[i] - avg)
+        if avg > 1e-15 and mag[i] > threshold * avg:
+            holdoff = holdoff_ext + lookahead
+        elif holdoff > 0:
+            holdoff -= 1
+        oldest = delay_buf[0]
+        if holdoff > 0:
+            out[i] = 0.0
+        else:
+            out[i] = oldest
+        delay_buf[:-1] = delay_buf[1:]
+        delay_buf[-1] = iq_samples[i]
+    return avg, holdoff
+
+
+def _pll_loop_py(i_samples, q_samples, out, phase, freq, alpha, beta, mode_code):
+    """Pure-Python PLL inner loop. mode_code: 0=SAM, 1=SAM-U, 2=SAM-L."""
+    n = len(i_samples)
+    for k in range(n):
+        mag2 = i_samples[k] * i_samples[k] + q_samples[k] * q_samples[k]
+        if mag2 < 1e-20:
+            # Near-zero input (e.g. blanked by NB) — coast: hold phase/freq, output zero
+            out[k] = 0.0
+            phase += freq
+            continue
+        cos_p = math.cos(phase)
+        sin_p = math.sin(phase)
+        dot = i_samples[k] * cos_p + q_samples[k] * sin_p
+        cross = -i_samples[k] * sin_p + q_samples[k] * cos_p
+        if mode_code == 1:
+            out[k] = dot + cross
+        elif mode_code == 2:
+            out[k] = dot - cross
+        else:
+            out[k] = dot
+        error = math.atan2(cross, dot)
+        freq += beta * error
+        phase += freq + alpha * error
+    return phase, freq
+
+
+def _cw_env_loop_py(abs_audio, env, env_peak, key_down, edge_sample,
+                     base_count, min_edge_samples, attack, decay, peak_decay,
+                     thresh_up, thresh_dn, min_peak, audio_rate,
+                     last_keyup_sample):
+    """Pure-Python CW envelope tracker. Returns state + list of (event, dur_ms, gap_ms, sample_pos)."""
+    events = []
+    for i in range(len(abs_audio)):
+        s = abs_audio[i]
+        if s > env:
+            env += attack * (s - env)
+        else:
+            env += decay * (s - env)
+        if env > env_peak:
+            env_peak = env
+        else:
+            env_peak *= peak_decay
+
+        sample_pos = base_count + i
+        if key_down:
+            key_now = env > env_peak * thresh_dn and env_peak > min_peak
+        else:
+            key_now = env > env_peak * thresh_up and env_peak > min_peak
+
+        if key_down != key_now:
+            edge_dur = sample_pos - edge_sample
+            if edge_dur < min_edge_samples:
+                continue
+
+        if key_down and not key_now:
+            dur_ms = (sample_pos - edge_sample) * 1000.0 / audio_rate
+            gap_ms = 0.0
+            if last_keyup_sample > 0:
+                gap_ms = (edge_sample - last_keyup_sample) * 1000.0 / audio_rate
+            if 15 < dur_ms < 2000:
+                events.append((dur_ms, gap_ms))
+            last_keyup_sample = sample_pos
+            edge_sample = sample_pos
+        elif not key_down and key_now:
+            edge_sample = sample_pos
+        key_down = key_now
+
+    return env, env_peak, key_down, edge_sample, last_keyup_sample, events
+
+
+if _HAS_NUMBA:
+    @numba.njit(cache=True)
+    def _nb_loop_jit(mag, iq_real, iq_imag, out_real, out_imag,
+                     threshold, avg, holdoff, delay_real, delay_imag,
+                     lookahead, ema_alpha, holdoff_ext):
+        """Numba-accelerated noise blanker inner loop."""
+        n = len(mag)
+        for i in range(n):
+            if mag[i] < threshold * avg or avg < 1e-15:
+                avg += ema_alpha * (mag[i] - avg)
+            if avg > 1e-15 and mag[i] > threshold * avg:
+                holdoff = holdoff_ext + lookahead
+            elif holdoff > 0:
+                holdoff -= 1
+            if holdoff > 0:
+                out_real[i] = 0.0
+                out_imag[i] = 0.0
+            else:
+                out_real[i] = delay_real[0]
+                out_imag[i] = delay_imag[0]
+            # Shift delay buffer
+            for j in range(len(delay_real) - 1):
+                delay_real[j] = delay_real[j + 1]
+                delay_imag[j] = delay_imag[j + 1]
+            delay_real[-1] = iq_real[i]
+            delay_imag[-1] = iq_imag[i]
+        return avg, holdoff
+
+    @numba.njit(cache=True)
+    def _pll_loop_jit(i_samples, q_samples, out, phase, freq, alpha, beta,
+                      mode_code):
+        """Numba-accelerated PLL inner loop."""
+        n = len(i_samples)
+        for k in range(n):
+            mag2 = i_samples[k] * i_samples[k] + q_samples[k] * q_samples[k]
+            if mag2 < 1e-20:
+                out[k] = 0.0
+                phase += freq
+                continue
+            cos_p = math.cos(phase)
+            sin_p = math.sin(phase)
+            dot = i_samples[k] * cos_p + q_samples[k] * sin_p
+            cross = -i_samples[k] * sin_p + q_samples[k] * cos_p
+            if mode_code == 1:
+                out[k] = dot + cross
+            elif mode_code == 2:
+                out[k] = dot - cross
+            else:
+                out[k] = dot
+            error = math.atan2(cross, dot)
+            freq += beta * error
+            phase += freq + alpha * error
+        return phase, freq
+
+    @numba.njit(cache=True)
+    def _cw_env_loop_jit(abs_audio, env, env_peak, key_down, edge_sample,
+                          base_count, min_edge_samples, attack, decay,
+                          peak_decay, thresh_up, thresh_dn, min_peak,
+                          audio_rate, last_keyup_sample):
+        """Numba-accelerated CW envelope tracker.
+
+        Returns (env, env_peak, key_down, edge_sample, last_keyup_sample,
+                 event_dur_ms, event_gap_ms, event_count).
+        Events are stored in pre-allocated arrays; event_count says how many are valid.
+        """
+        max_events = len(abs_audio)
+        event_dur = np.empty(max_events, dtype=np.float64)
+        event_gap = np.empty(max_events, dtype=np.float64)
+        ec = 0
+
+        for i in range(len(abs_audio)):
+            s = abs_audio[i]
+            if s > env:
+                env += attack * (s - env)
+            else:
+                env += decay * (s - env)
+            if env > env_peak:
+                env_peak = env
+            else:
+                env_peak *= peak_decay
+
+            sample_pos = base_count + i
+            if key_down:
+                key_now = env > env_peak * thresh_dn and env_peak > min_peak
+            else:
+                key_now = env > env_peak * thresh_up and env_peak > min_peak
+
+            if key_down != key_now:
+                edge_dur_samp = sample_pos - edge_sample
+                if edge_dur_samp < min_edge_samples:
+                    continue
+
+            if key_down and not key_now:
+                dur_ms = (sample_pos - edge_sample) * 1000.0 / audio_rate
+                gap_ms = 0.0
+                if last_keyup_sample > 0:
+                    gap_ms = (edge_sample - last_keyup_sample) * 1000.0 / audio_rate
+                if 15 < dur_ms < 2000:
+                    event_dur[ec] = dur_ms
+                    event_gap[ec] = gap_ms
+                    ec += 1
+                last_keyup_sample = sample_pos
+                edge_sample = sample_pos
+            elif not key_down and key_now:
+                edge_sample = sample_pos
+            key_down = key_now
+
+        return (env, env_peak, key_down, edge_sample, last_keyup_sample,
+                event_dur, event_gap, ec)
+
+
 def compute_spectrum_db(iq_samples, fft_size=4096):
     """Compute power spectrum in dB from IQ samples.
 
@@ -139,7 +371,7 @@ def compute_spectrum_db(iq_samples, fft_size=4096):
     window = _blackman_cache[fft_size]
 
     windowed = iq_samples[:fft_size] * window
-    spectrum = np.fft.fftshift(np.fft.fft(windowed))
+    spectrum = _fftshift(_fft(windowed))
     power = np.maximum(np.abs(spectrum) ** 2, 1e-20)
     db = 10.0 * np.log10(power) - 10.0 * np.log10(fft_size)
     return db.astype(np.float32)
@@ -476,7 +708,7 @@ class Demodulator:
 
         # Power spectrum
         window = np.hanning(fft_size).astype(np.float32)
-        spec = np.fft.fft(frame * window)
+        spec = _fft(frame * window)
         spec_power = np.abs(spec) ** 2
 
         # Select only passband bins (±bandwidth around DC)
@@ -525,41 +757,35 @@ class Demodulator:
         Detects impulses that exceed threshold * running average magnitude,
         and replaces them with zeros. Uses a small lookahead delay buffer.
         """
-        mag = np.abs(iq_samples)
+        mag = np.abs(iq_samples).astype(np.float64)
         n = len(mag)
-        out = np.empty(n, dtype=np.complex64)
         threshold = self._nb_threshold
-        avg = self._nb_avg_mag
-        holdoff = self._nb_holdoff_count
+        avg = float(self._nb_avg_mag)
+        holdoff = int(self._nb_holdoff_count)
         delay_buf = self._nb_delay_buf
         lookahead = _NB_LOOKAHEAD
 
-        # Process with lookahead: delay output by lookahead samples
-        # so we can blank samples just before an impulse
-        for i in range(n):
-            # Update running average (exclude impulses from average)
-            if mag[i] < threshold * avg or avg < 1e-15:
-                avg += _NB_EMA_ALPHA * (mag[i] - avg)
-
-            # Check if current sample is an impulse
-            if avg > 1e-15 and mag[i] > threshold * avg:
-                holdoff = _NB_HOLDOFF + lookahead
-            elif holdoff > 0:
-                holdoff -= 1
-
-            # Output delayed sample (blank if in holdoff window)
-            oldest = delay_buf[0]
-            if holdoff > 0:
-                out[i] = 0.0
-            else:
-                out[i] = oldest
-
-            # Shift delay buffer and insert new sample
-            delay_buf[:-1] = delay_buf[1:]
-            delay_buf[-1] = iq_samples[i]
+        if _HAS_NUMBA:
+            delay_real = delay_buf.real.copy().astype(np.float64)
+            delay_imag = delay_buf.imag.copy().astype(np.float64)
+            out_real = np.empty(n, dtype=np.float64)
+            out_imag = np.empty(n, dtype=np.float64)
+            avg, holdoff = _nb_loop_jit(
+                mag, iq_samples.real.astype(np.float64),
+                iq_samples.imag.astype(np.float64),
+                out_real, out_imag, threshold, avg, holdoff,
+                delay_real, delay_imag, lookahead,
+                _NB_EMA_ALPHA, _NB_HOLDOFF)
+            out = (out_real + 1j * out_imag).astype(np.complex64)
+            delay_buf[:] = (delay_real + 1j * delay_imag).astype(np.complex64)
+        else:
+            out = np.empty(n, dtype=np.complex64)
+            avg, holdoff = _nb_loop_py(
+                mag, iq_samples, out, threshold, avg, holdoff,
+                delay_buf, lookahead, _NB_EMA_ALPHA, _NB_HOLDOFF)
 
         self._nb_avg_mag = avg
-        self._nb_holdoff_count = holdoff
+        self._nb_holdoff_count = int(holdoff)
         return out
 
     def _apply_dnr(self, audio):
@@ -586,7 +812,7 @@ class Demodulator:
             self._dnr_in_buf = self._dnr_in_buf[hop:]
 
             # Analysis
-            spectrum = np.fft.rfft(frame * self._dnr_window)
+            spectrum = _rfft(frame * self._dnr_window)
             power = np.abs(spectrum) ** 2
 
             self._dnr_frame_count += 1
@@ -636,7 +862,7 @@ class Demodulator:
             # Apply gain and synthesize
             filtered = spectrum * gain
             out_frame = (
-                np.fft.irfft(filtered, n=fft_size) * self._dnr_synth_window
+                _irfft(filtered, n=fft_size) * self._dnr_synth_window
             ).astype(np.float32)
 
             # Overlap-add
@@ -665,7 +891,7 @@ class Demodulator:
             frame = self._an_in_buf[:fft_size]
             self._an_in_buf = self._an_in_buf[hop:]
 
-            spectrum = np.fft.rfft(frame * self._an_window)
+            spectrum = _rfft(frame * self._an_window)
             power = np.abs(spectrum) ** 2
             n_bins = len(power)
 
@@ -721,7 +947,7 @@ class Demodulator:
             # Apply and synthesize
             filtered = spectrum * notch_gain
             out_frame = (
-                np.fft.irfft(filtered, n=fft_size) * self._an_synth_window
+                _irfft(filtered, n=fft_size) * self._an_synth_window
             ).astype(np.float32)
 
             # Overlap-add
@@ -863,7 +1089,7 @@ class Demodulator:
         fft_n = _CW_FFT_SIZE
         bin_hz = self.audio_rate / fft_n
         win = np.hanning(fft_n).astype(np.float32)
-        spec = np.abs(np.fft.rfft(ordered_buf * win)) ** 2
+        spec = np.abs(_rfft(ordered_buf * win)) ** 2
 
         lo = max(1, int((self._bfo_offset - self.bandwidth) / bin_hz))
         hi = min(len(spec) - 1, int((self._bfo_offset + self.bandwidth) / bin_hz))
@@ -1013,82 +1239,58 @@ class Demodulator:
         chatter on noisy signals, and a minimum edge duration debounce
         to reject noise glitches.
         """
-        abs_audio = np.abs(audio)
-        env = self._cw_env
-        env_peak = self._cw_env_peak
-        key_down = self._cw_key_down
-        edge_sample = self._cw_edge_sample
+        abs_audio = np.abs(audio).astype(np.float64)
         base_count = self._cw_sample_count
         min_edge_samples = int(_CW_MIN_EDGE_MS * self.audio_rate / 1000.0)
 
-        for i in range(len(abs_audio)):
-            s = abs_audio[i]
-            if s > env:
-                env += _CW_ENV_ATTACK * (s - env)
-            else:
-                env += _CW_ENV_DECAY * (s - env)
-            if env > env_peak:
-                env_peak = env
-            else:
-                env_peak *= _CW_PEAK_DECAY
-
-            sample_pos = base_count + i
-
-            # Hysteresis: use higher threshold to go key-down, lower to go key-up
-            # Require env_peak above minimum to reject noise-only false triggers
-            if key_down:
-                key_now = env > env_peak * _CW_THRESHOLD_DN and env_peak > _CW_MIN_PEAK
-            else:
-                key_now = env > env_peak * _CW_THRESHOLD_UP and env_peak > _CW_MIN_PEAK
-
-            # Debounce: reject transitions shorter than minimum edge duration
-            if key_down != key_now:
-                edge_dur = sample_pos - edge_sample
-                if edge_dur < min_edge_samples:
-                    continue  # too short — ignore this transition
-
-            if key_down and not key_now:
-                dur_ms = (sample_pos - edge_sample) * 1000.0 / self.audio_rate
-                if 15 < dur_ms < 2000:
-                    # Compute gap since last key-up (for character boundary detection)
-                    gap_ms = 0.0
-                    if self._cw_last_keyup_sample > 0:
-                        gap_ms = (edge_sample - self._cw_last_keyup_sample) * 1000.0 / self.audio_rate
-
-                    self._cw_element_ms.append(dur_ms)
-                    if len(self._cw_element_ms) > 60:
-                        self._cw_element_ms = self._cw_element_ms[-60:]
-                    self._cw_update_wpm()
-
-                    if self._cw_dit_ms > 0:
-                        # Replay any pending edges first
-                        if self._cw_pending_edges:
-                            self._cw_replay_pending()
-                        # Check gap for character/word boundary
-                        if gap_ms > self._cw_dit_ms * 4.0 and self._cw_current_char:
-                            self._cw_decode_char()
-                            self._cw_append_text(" ")
-                        elif gap_ms > self._cw_dit_ms * 2.0 and self._cw_current_char:
-                            self._cw_decode_char()
-                        # Classify current element
-                        if dur_ms < self._cw_dit_ms * 2.0:
-                            self._cw_current_char.append(".")
-                        else:
-                            self._cw_current_char.append("-")
-                    else:
-                        # Buffer edge until dit_ms is established
-                        self._cw_pending_edges.append((dur_ms, gap_ms))
-                self._cw_last_keyup_sample = sample_pos
-                edge_sample = sample_pos
-            elif not key_down and key_now:
-                edge_sample = sample_pos
-            key_down = key_now
+        if _HAS_NUMBA:
+            (env, env_peak, key_down, edge_sample, last_keyup,
+             ev_dur, ev_gap, ec) = _cw_env_loop_jit(
+                abs_audio, float(self._cw_env), float(self._cw_env_peak),
+                self._cw_key_down, self._cw_edge_sample, base_count,
+                min_edge_samples, _CW_ENV_ATTACK, _CW_ENV_DECAY,
+                _CW_PEAK_DECAY, _CW_THRESHOLD_UP, _CW_THRESHOLD_DN,
+                _CW_MIN_PEAK, float(self.audio_rate),
+                self._cw_last_keyup_sample)
+            events = [(ev_dur[i], ev_gap[i]) for i in range(ec)]
+        else:
+            (env, env_peak, key_down, edge_sample, last_keyup,
+             events) = _cw_env_loop_py(
+                abs_audio, self._cw_env, self._cw_env_peak,
+                self._cw_key_down, self._cw_edge_sample, base_count,
+                min_edge_samples, _CW_ENV_ATTACK, _CW_ENV_DECAY,
+                _CW_PEAK_DECAY, _CW_THRESHOLD_UP, _CW_THRESHOLD_DN,
+                _CW_MIN_PEAK, self.audio_rate,
+                self._cw_last_keyup_sample)
 
         self._cw_env = env
         self._cw_env_peak = env_peak
-        self._cw_key_down = key_down
-        self._cw_edge_sample = edge_sample
+        self._cw_key_down = bool(key_down)
+        self._cw_edge_sample = int(edge_sample)
+        self._cw_last_keyup_sample = int(last_keyup)
         self._cw_sample_count = base_count + len(audio)
+
+        # Process detected events (Morse decode logic stays in Python)
+        for dur_ms, gap_ms in events:
+            self._cw_element_ms.append(dur_ms)
+            if len(self._cw_element_ms) > 60:
+                self._cw_element_ms = self._cw_element_ms[-60:]
+            self._cw_update_wpm()
+
+            if self._cw_dit_ms > 0:
+                if self._cw_pending_edges:
+                    self._cw_replay_pending()
+                if gap_ms > self._cw_dit_ms * 4.0 and self._cw_current_char:
+                    self._cw_decode_char()
+                    self._cw_append_text(" ")
+                elif gap_ms > self._cw_dit_ms * 2.0 and self._cw_current_char:
+                    self._cw_decode_char()
+                if dur_ms < self._cw_dit_ms * 2.0:
+                    self._cw_current_char.append(".")
+                else:
+                    self._cw_current_char.append("-")
+            else:
+                self._cw_pending_edges.append((dur_ms, gap_ms))
 
         # Flush pending character on long silence
         if (not self._cw_key_down and self._cw_dit_ms > 0
@@ -1427,32 +1629,28 @@ class Demodulator:
         return self._pll_freq * self.audio_rate / (2.0 * np.pi)
 
     def _pll_detect(self, i_samples, q_samples, mode="SAM"):
-        """PLL-based synchronous AM detection using math (not numpy) for scalars."""
+        """PLL-based synchronous AM detection."""
         n = len(i_samples)
-        out = np.empty(n, dtype=np.float32)
-        phase = self._pll_phase
-        freq = self._pll_freq
+        out = np.empty(n, dtype=np.float64)
+        phase = float(self._pll_phase)
+        freq = float(self._pll_freq)
         alpha = _PLL_ALPHA
         beta = _PLL_BETA
+        mode_code = {"SAM": 0, "SAM-U": 1, "SAM-L": 2}.get(mode, 0)
 
-        for k in range(n):
-            cos_p = math.cos(phase)
-            sin_p = math.sin(phase)
-            dot = i_samples[k] * cos_p + q_samples[k] * sin_p
-            cross = -i_samples[k] * sin_p + q_samples[k] * cos_p
-            if mode == "SAM-U":
-                out[k] = dot + cross
-            elif mode == "SAM-L":
-                out[k] = dot - cross
-            else:
-                out[k] = dot
-            error = math.atan2(cross, dot)
-            freq += beta * error
-            phase += freq + alpha * error
+        i_f64 = i_samples.astype(np.float64)
+        q_f64 = q_samples.astype(np.float64)
+
+        if _HAS_NUMBA:
+            phase, freq = _pll_loop_jit(i_f64, q_f64, out, phase, freq,
+                                        alpha, beta, mode_code)
+        else:
+            phase, freq = _pll_loop_py(i_f64, q_f64, out, phase, freq,
+                                       alpha, beta, mode_code)
 
         self._pll_phase = (phase + math.pi) % (2 * math.pi) - math.pi
         self._pll_freq = max(-0.5, min(0.5, freq))
-        return out
+        return out.astype(np.float32)
 
     def reset(self):
         """Reset all filter, AGC, PLL, and noise reduction state."""

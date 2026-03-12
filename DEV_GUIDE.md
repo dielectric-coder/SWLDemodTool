@@ -133,7 +133,9 @@ IQ (192 kHz) -> [Noise Blanker] (impulse detection + zeroing)
 
 **SNR Estimator:** Measures in-band SNR from decimated IQ using a 1024-point FFT. Compares total passband power (mean of passband bins) to the noise floor (median of passband bins — robust to narrowband signals). Asymmetric smoothing: noise floor rises slowly (0.005) and drops fast (0.1). Result clamped to 0-60 dB.
 
-**SAM PLL:** PI loop filter (~30 Hz bandwidth at 48 kHz) with atan2-normalized phase error. Tracks carrier drift without following audio modulation.
+**SAM PLL:** PI loop filter (~30 Hz bandwidth at 48 kHz) with atan2-normalized phase error. Tracks carrier drift without following audio modulation. The PLL coasts through near-zero input samples (e.g. blanked by the noise blanker) — holding frequency and phase while outputting silence — to prevent loss of lock.
+
+**Optional accelerators:** FFT calls use `pyfftw` when installed (FFTW3 with wisdom caching, typically 2-3× faster). Three per-sample inner loops (noise blanker, PLL, CW envelope tracker) use `numba` JIT when installed. Both fall back to NumPy/SciPy transparently. Install via `pip install -e ".[accel]"`.
 
 **CW BFO:** 700 Hz tone offset mixed with the decimated complex signal. CW+ shifts up (+700 Hz, upper sideband), CW- shifts down (-700 Hz, lower sideband). Phase accumulator persists across chunks for glitch-free output. Default bandwidth 500 Hz (adjustable 100-1000 Hz). CW uses a two-stage filter: wide 2400 Hz pre-decimation anti-alias (127-tap at 192 kHz), then narrow post-decimation audio-rate lowpass (255-tap at 48 kHz) applied to I/Q before BFO mixing.
 

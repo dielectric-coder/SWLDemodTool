@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.5] - 2026-03-12
+
+### Added
+- **Optional DSP accelerators**: pyfftw (FFTW3-backed FFT with wisdom caching) and numba (JIT compilation) as optional dependencies via `pip install -e ".[accel]"`. All 7 FFT call sites use pyfftw when available (spectrum, SNR, DNR, auto notch, CW tone analysis). Three per-sample inner loops (noise blanker, SAM PLL, CW envelope tracker) use numba JIT. Both fall back transparently to NumPy/SciPy.
+
+### Fixed
+- **PLL loss of lock with noise blanker**: SAM/SAM-U/SAM-L PLL now coasts through near-zero input samples (blanked by NB) instead of chasing undefined phase from `atan2(0,0)`. Holds frequency and phase estimate while outputting silence, preventing multi-second recovery transients when enabling the noise blanker.
+
 ## [0.4.4] - 2026-03-10
 
 ### Added

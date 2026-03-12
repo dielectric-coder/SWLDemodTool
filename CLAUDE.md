@@ -14,6 +14,9 @@ A native C/GTK4 GUI port is available separately as [HFDemodGTK](https://github.
 # Install in dev mode
 pip install -e .
 
+# Install with optional DSP accelerators (pyfftw + numba)
+pip install -e ".[accel]"
+
 # Run
 swl-demod
 swl-demod --host 192.168.1.10 --iq-port 4533 --cat-port 4532 --audio-device default

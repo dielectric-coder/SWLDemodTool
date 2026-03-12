@@ -25,6 +25,16 @@ cd SWLDemodTool
 pip install -e .
 ```
 
+### Optional Accelerators
+
+For faster DSP processing, install the optional `accel` extras:
+
+```bash
+pip install -e ".[accel]"
+```
+
+This adds **pyfftw** (FFTW3-backed FFT, typically 2-3× faster) and **numba** (JIT compilation for per-sample loops like the PLL, noise blanker, and CW envelope tracker). Both are optional — the tool works fine without them using NumPy/SciPy.
+
 ### DRM Support
 
 DRM decoding requires the Dream 2.2 binary. Build it from source or install from your package manager.
