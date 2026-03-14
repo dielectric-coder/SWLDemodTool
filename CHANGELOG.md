@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.5.5] - 2026-03-14
+
+### Added
+- **SWL log entry** (`l`): Press `l` to open a modal log form pre-filled with current frequency, mode, bandwidth, and station name. Enter a SINPO rating and remarks, then press Enter to append a CSV row to `~/Documents/swl-log.csv`. Listener name persists across sessions via config. Log file path configurable via `[logging]` config section.
+
 ## [0.5.4] - 2026-03-14
 
 ### Added

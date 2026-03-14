@@ -16,6 +16,7 @@ src/swl_demod_tool/
     dsp.py            # DSP: FFT spectrum, sparkline rendering, AM/SSB/CW/RTTY/PSK31/MFSK16 demodulator, noise reduction
     drm.py            # DRM decoder integration (Dream subprocess)
     audio.py          # Audio output via sounddevice with ring buffer
+    wefax.py          # WEFAX decoder (APT line detection, image assembly)
     config.py         # INI config file handling
 ```
 

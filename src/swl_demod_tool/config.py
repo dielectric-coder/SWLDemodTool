@@ -31,6 +31,10 @@ DEFAULTS = {
         "auto_save": "true",
         "save_dir": "~/Pictures/fax",
     },
+    "logging": {
+        "listener": "",
+        "log_file": "~/Documents/swl-log.csv",
+    },
     "state": {
         "mode": "AM",
         "bandwidth": "5000",
@@ -70,6 +74,7 @@ DEFAULT_KEYS = {
     "cycle_dnr": "N",
     "toggle_auto_notch": "alt+n",
     "toggle_spectrum": "d",
+    "log_entry": "l",
 }
 
 # Human-readable key <-> Textual internal key name

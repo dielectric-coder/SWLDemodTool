@@ -104,6 +104,7 @@ All keybindings are configurable via the `[keys]` section in `config.conf`.
 | `N` (Shift+N)   | Cycle DNR level (Off / 1 / 2 / 3)  |
 | `Alt+n`         | Toggle auto notch filter (DNF)      |
 | `p`             | Toggle CW Audio Peak Filter (APF)  |
+| `l`             | Create SWL log entry                |
 | `t`             | Clear decoded text (CW/RTTY/PSK31/MFSK16) |
 
 ## Display Layout
@@ -238,6 +239,18 @@ DNR works best on stationary broadband noise (atmospheric hiss, receiver thermal
 
 In AM, SAM, USB, and LSB modes, the mode info panel shows an estimated in-band signal-to-noise ratio. The measurement compares total passband power to the noise floor (estimated from the median of spectral bins). It updates continuously and takes a few seconds to stabilize after tuning.
 
+## SWL Logging
+
+Press `l` to open a log entry form. The form is pre-filled with the current frequency, mode, bandwidth, and station name. Enter a SINPO rating (e.g. `45444`) and optional remarks, then press Enter to save. Press Esc to cancel.
+
+Log entries are appended as CSV rows to `~/Documents/swl-log.csv` (configurable). The CSV columns are:
+
+```
+date,time_utc,listener,station,frequency_khz,mode,bandwidth,sinpo,remarks
+```
+
+The listener name is remembered across sessions — it is saved to the config file each time you submit a log entry.
+
 Mode and bandwidth are independent of the radio's settings — they are controlled locally in the app. VFO and frequency are polled from the radio so changes made on the radio or other apps are reflected.
 
 ## VFO Control
@@ -297,6 +310,14 @@ The `[noise_reduction]` section stores noise reduction defaults:
 nb_enabled = false
 nb_threshold = Med
 dnr_level = 0
+```
+
+The `[logging]` section configures SWL log entry defaults:
+
+```ini
+[logging]
+listener = Your Name
+log_file = ~/Documents/swl-log.csv
 ```
 
 Command-line options override config file values.

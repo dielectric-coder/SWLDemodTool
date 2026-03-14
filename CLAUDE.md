@@ -30,7 +30,7 @@ Real-time data pipeline: **IQ network stream -> DSP -> audio output**, with a Te
 
 ### Module Responsibilities
 
-- **`app.py`** — Textual `App` subclass (`DemodApp`). TUI layout, keybindings, periodic UI refresh (1s tick + 100ms display update), coordinates all components. Entry point is `main()`. Uses `SDRSource` abstraction for all IQ/control operations. Listens on `$XDG_RUNTIME_DIR/swldemod-station.fifo` for station names from external tools (e.g. SWLScheduleTool). Also auto-resolves station names from the SWLScheduleTool schedule CSV (`sked-current.csv`) when the tuned frequency changes.
+- **`app.py`** — Textual `App` subclass (`DemodApp`). TUI layout, keybindings, periodic UI refresh (1s tick + 100ms display update), coordinates all components. Entry point is `main()`. Uses `SDRSource` abstraction for all IQ/control operations. Listens on `$XDG_RUNTIME_DIR/swldemod-station.fifo` for station names from external tools (e.g. SWLScheduleTool). Also auto-resolves station names from the SWLScheduleTool schedule CSV (`sked-current.csv`) when the tuned frequency changes. Includes `LogEntryScreen` modal for SWL logging to CSV.
 - **`sdr/`** — Pluggable SDR backend package:
   - **`base.py`** — `SDRSource` ABC (connect/disconnect/stream + optional radio control) and `SDRInfo` dataclass.
   - **`elad_fdmduo.py`** — Elad FDM-DUO backend wrapping `IQClient` + `CATClient`.
@@ -40,7 +40,7 @@ Real-time data pipeline: **IQ network stream -> DSP -> audio output**, with a Te
 - **`dsp.py`** — FFT spectrum (Blackman window, 4096-point), multi-row Unicode bar chart with peak-hold downsampling, and `Demodulator` class (FIR lowpass -> decimate -> AM/SSB/CW/RTTY/PSK31/MFSK16 detection -> DC removal -> AGC). CW modes include two-stage filtering, BFO tone mixing, tone detection with SNR measurement, and keying speed estimation. RTTY uses dual bandpass mark/space filters with Baudot decoder. PSK31 uses NCO downconversion with differential phase detection and Varicode decoder. MFSK16 uses FFT tone detection with soft-decision Viterbi FEC and IZ8BLY MFSK Varicode.
 - **`drm.py`** — DRM decoder integration. Spawns the Dream 2.2 decoder as a subprocess using stdin/stdout pipes (`-I -` / `-O -`). Feeds raw int16 stereo IQ to Dream's stdin, reads decoded audio from stdout, reads JSON status from a Unix domain socket (`--status-socket`).
 - **`audio.py`** — `sounddevice` OutputStream with manual ring buffer. Handles underruns with silence.
-- **`config.py`** — INI config via `configparser` at `$XDG_CONFIG_HOME/swl-demod-tool/config.conf`.
+- **`config.py`** — INI config via `configparser` at `$XDG_CONFIG_HOME/swl-demod-tool/config.conf`. Sections: `[sdr]`, `[server]`, `[audio]`, `[drm]`, `[noise_reduction]`, `[wefax]`, `[logging]`, `[state]`, `[keys]`.
 
 ### Threading Model
 

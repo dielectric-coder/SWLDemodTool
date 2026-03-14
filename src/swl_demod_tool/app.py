@@ -269,6 +269,7 @@ KEYBINDING_META = {
     "toggle_auto_notch": ("Toggle DNF (auto notch)",     "Noise Reduction", "DNF"),
     "toggle_apf":        ("Toggle CW audio peak filter", "Noise Reduction", "APF"),
     "toggle_spectrum":   ("Toggle spectrum display",     "Display",         "Spec"),
+    "log_entry":         ("Create SWL log entry",        "Logging",         "Log"),
 }
 
 # Pairs of (down_action, up_action) shown as a single "key1 / key2" help entry
@@ -283,7 +284,7 @@ _PAIRED_ACTIONS = [
 # Section display order
 _SECTION_ORDER = [
     "General", "Connection", "Tuning", "Audio & Mode", "Display",
-    "Noise Reduction",
+    "Noise Reduction", "Logging",
 ]
 
 
@@ -470,6 +471,133 @@ class SelectorScreen(ModalScreen):
         self.dismiss(event.option.id)
 
 
+LOG_ENTRY_CSS = """
+#log-container {
+    align: center middle;
+    width: 100%;
+    height: 100%;
+    background: black 50%;
+}
+
+#log-card {
+    width: 60;
+    height: auto;
+    max-height: 90%;
+    border: solid #a3aed2;
+    background: #1a1a2e;
+    color: #a9b1d6;
+    padding: 0;
+}
+
+#log-title {
+    text-style: bold;
+    text-align: center;
+    width: 100%;
+    padding: 1 0;
+    color: #a3aed2;
+    border-bottom: solid #a3aed2;
+}
+
+#log-form {
+    width: 100%;
+    height: auto;
+    padding: 1 2;
+}
+
+.log-label {
+    width: 100%;
+    height: 1;
+    color: #a3aed2;
+    padding: 0;
+}
+
+.log-row {
+    width: 100%;
+    height: auto;
+    layout: horizontal;
+}
+
+.log-row-cell {
+    height: auto;
+}
+
+.log-row-cell .log-label {
+    width: 100%;
+}
+
+#log-form Input {
+    width: 100%;
+    height: 3;
+    margin: 0 0 0 0;
+}
+
+#log-hint {
+    text-align: center;
+    width: 100%;
+    padding: 0 0;
+    color: $text-muted;
+    border-top: solid #a3aed2;
+}
+"""
+
+
+class LogEntryScreen(ModalScreen):
+    """Modal form for creating an SWL log entry."""
+
+    CSS = LOG_ENTRY_CSS
+    BINDINGS = [
+        ("escape", "dismiss", "Close"),
+    ]
+
+    def __init__(self, listener="", station="", freq_khz="0.000", mode="AM", bw="5000"):
+        super().__init__()
+        self._listener = listener
+        self._station = station
+        self._freq_khz = freq_khz
+        self._mode = mode
+        self._bw = bw
+
+    def compose(self):
+        with Container(id="log-container"):
+            with Container(id="log-card"):
+                yield Static("Log Entry", id="log-title")
+                with Vertical(id="log-form"):
+                    yield Static("Listener:", classes="log-label")
+                    yield Input(value=self._listener, id="log-listener")
+                    yield Static("Station:", classes="log-label")
+                    yield Input(value=self._station, id="log-station")
+                    with Horizontal(classes="log-row"):
+                        with Vertical(classes="log-row-cell"):
+                            yield Static("Freq kHz:", classes="log-label")
+                            yield Input(value=self._freq_khz, id="log-freq")
+                        with Vertical(classes="log-row-cell"):
+                            yield Static("Mode:", classes="log-label")
+                            yield Input(value=self._mode, id="log-mode")
+                        with Vertical(classes="log-row-cell"):
+                            yield Static("BW:", classes="log-label")
+                            yield Input(value=self._bw, id="log-bw")
+                    yield Static("SINPO:", classes="log-label")
+                    yield Input(placeholder="e.g. 45444", id="log-sinpo")
+                    yield Static("Remarks:", classes="log-label")
+                    yield Input(placeholder="Free text", id="log-remarks")
+                yield Static("Tab: next \u00b7 Enter: save \u00b7 Esc: cancel", id="log-hint")
+
+    def on_mount(self):
+        self.query_one("#log-sinpo", Input).focus()
+
+    def on_input_submitted(self, event):
+        data = {
+            "listener": self.query_one("#log-listener", Input).value,
+            "station": self.query_one("#log-station", Input).value,
+            "freq_khz": self.query_one("#log-freq", Input).value,
+            "mode": self.query_one("#log-mode", Input).value,
+            "bw": self.query_one("#log-bw", Input).value,
+            "sinpo": self.query_one("#log-sinpo", Input).value,
+            "remarks": self.query_one("#log-remarks", Input).value,
+        }
+        self.dismiss(data)
+
+
 # S-meter thresholds (dB values corresponding to S-units, approximate)
 S_METER_BLOCKS = "▏▎▍▌▋▊▉█"
 
@@ -525,6 +653,7 @@ class DemodApp(App):
         ("N", "cycle_dnr", "DNR"),
         ("alt+n", "toggle_auto_notch", "DNF"),
         ("d", "toggle_spectrum", "Spec"),
+        ("l", "log_entry", "Log"),
     ]
 
     utc_display = reactive("--:-- UTC")
@@ -566,6 +695,11 @@ class DemodApp(App):
             sample_rate=48000, ioc=wefax_ioc, rpm=wefax_rpm,
             save_dir=wefax_dir, auto_save=wefax_auto)
         self._decode_viewer_proc = None
+
+        # SWL logging
+        self._log_file = os.path.expanduser(
+            config.get("logging", "log_file", fallback="~/Documents/swl-log.csv") if config else "~/Documents/swl-log.csv")
+        self._log_listener = config.get("logging", "listener", fallback="") if config else ""
 
         # Audio level tracking
         self._audio_level_db = -120.0
@@ -1562,6 +1696,51 @@ class DemodApp(App):
         if isinstance(self.focused, Input) and action not in ("quit", "unfocus"):
             return None
         return True
+
+    def action_log_entry(self):
+        """Open the SWL log entry form."""
+        freq_khz = self.frequency_hz / 1000 if self.frequency_hz else 0
+        self.push_screen(
+            LogEntryScreen(
+                listener=self._log_listener,
+                station=self.station_name,
+                freq_khz=f"{freq_khz:.3f}",
+                mode=self.demod.mode,
+                bw=str(self.demod.bandwidth)),
+            callback=self._on_log_entry)
+
+    def _on_log_entry(self, data):
+        if data is None:
+            return
+        self._log_listener = data.get("listener", "")
+        if self._config:
+            if not self._config.has_section("logging"):
+                self._config.add_section("logging")
+            self._config.set("logging", "listener", self._log_listener)
+            save_config(self._config)
+        self._write_log_entry(data)
+        self.notify("Log entry saved")
+
+    def _write_log_entry(self, data):
+        os.makedirs(os.path.dirname(self._log_file), exist_ok=True)
+        write_header = not os.path.exists(self._log_file)
+        now = datetime.now(timezone.utc)
+        with open(self._log_file, "a", newline="") as f:
+            writer = csv.writer(f)
+            if write_header:
+                writer.writerow(["date", "time_utc", "listener", "station",
+                                 "frequency_khz", "mode", "bandwidth", "sinpo", "remarks"])
+            writer.writerow([
+                now.strftime("%Y-%m-%d"),
+                now.strftime("%H:%M"),
+                data.get("listener", ""),
+                data.get("station", ""),
+                data.get("freq_khz", ""),
+                data.get("mode", ""),
+                data.get("bw", ""),
+                data.get("sinpo", ""),
+                data.get("remarks", ""),
+            ])
 
     def action_unfocus(self):
         """Remove focus from any focused widget."""
