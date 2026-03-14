@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.3] - 2026-03-14
+
+### Added
+- **Station name display on spectrum**: When SWLScheduleTool tunes the radio, the station name is sent via a named FIFO (`$XDG_RUNTIME_DIR/swldemod-station.fifo`) and displayed on the spectrum info line in bold gold. Clears automatically on manual tune.
+- **Station FIFO listener**: Daemon thread creates and monitors the FIFO for station name updates from external tools.
+
+### Changed
+- **Spectrum display simplified**: Removed frequency display and bandwidth underline from the spectrum info line. Only the center marker (▲), station name (when available), and span indicator remain.
+
 ## [0.5.2] - 2026-03-14
 
 ### Added

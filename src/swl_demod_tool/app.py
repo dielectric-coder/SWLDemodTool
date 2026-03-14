@@ -692,38 +692,24 @@ class DemodApp(App):
         bw_half = max(1, int(bw / span_hz * width) // 2)
         bw_start = max(0, center - bw_half)
         bw_end = min(width, center + bw_half)
-        # Build bandwidth bar with center marker
+        # Build center marker line
         bw_bar = [" "] * width
-        for i in range(bw_start, center):
-            bw_bar[i] = "▁"
         if 0 <= center < width:
             bw_bar[center] = "▲"
-        for i in range(center + 1, bw_end + 1):
-            if i < width:
-                bw_bar[i] = "▁"
         bw_line = "".join(bw_bar)
 
-        # Show center frequency, station name, and visible span
-        freq_str = ""
-        if self.frequency_hz > 0:
-            freq_str = f"{self.frequency_hz / 1e6:.3f}"
+        # Show station name and visible span
         span_khz = span_hz / 1000
         span_str = f"Span: {span_khz:.0f} kHz"
 
-        # Build info line: freq on left, station name centered, span on right
         stn = self.station_name
-        left_pad = max(0, center - len(freq_str) // 2)
         if stn:
-            # Truncate station name to fit available space
-            avail = width - len(freq_str) - len(span_str) - 4
+            avail = width - len(span_str) - 2
             if len(stn) > avail:
                 stn = stn[:max(0, avail - 1)] + "…"
-            mid_gap = max(1, width - left_pad - len(freq_str) - len(span_str))
-            # Center station name within the middle gap
-            stn_pad = max(1, (mid_gap - len(stn)) // 2)
-            info_line = f"  {' ' * left_pad}{freq_str}{' ' * stn_pad}[bold #f0c674]{stn}[/]{' ' * max(1, mid_gap - stn_pad - len(stn))}{span_str}"
+            info_line = f"  [bold #f0c674]{stn}[/]{' ' * max(1, width - len(stn) - len(span_str))}{span_str}"
         else:
-            info_line = f"  {' ' * left_pad}{freq_str}{' ' * max(1, width - left_pad - len(freq_str) - len(span_str))}{span_str}"
+            info_line = f"  {' ' * max(1, width - len(span_str))}{span_str}"
 
         w.update(
             f"{indented}\n"

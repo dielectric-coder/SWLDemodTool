@@ -145,7 +145,7 @@ A dedicated panel below the audio info displays mode-specific indicators:
 - **Title bar** - App name and UTC clock
 - **Connection status** - IQ stream, CAT control (with backend name and host:port), and audio output status with sample rate info
 - **Radio info** - Active VFO, tuned frequency, operating mode, bandwidth
-- **Spectrum** - Multi-row bar graph of the received spectrum with center frequency marker and zoom span
+- **Spectrum** - Multi-row bar graph of the received spectrum with center marker (▲), station name (from SWLScheduleTool), and zoom span
 - **Audio info** - AF Gain (dB), AF Peak (audio level), RF Peak (IQ spectrum peak dBFS), S-meter, AGC gain bar, buffer fill, noise reduction status (NB, DNR, DNF, APF)
 - **Mode info** - Mode-specific indicators (CW tuning/SNR/WPM, DRM status, SAM offset, SNR, RIT)
 
@@ -238,13 +238,21 @@ Mode and bandwidth are independent of the radio's settings — they are controll
 
 Press `v` to toggle between VFO-A and VFO-B. The frequency display updates to show the selected VFO's frequency. Tuning controls (`→`/`←`, `Alt+→`/`Alt+←`, `/`) tune the active VFO.
 
-## Spectrum Zoom
+## Spectrum Display
+
+The spectrum shows a multi-row Unicode bar chart with a center marker (▲) indicating the tuned frequency. The info line below shows:
+- **Station name** (bold gold, left side) — displayed when SWLScheduleTool sends a station name via FIFO; clears on manual tune
+- **Span** (right side) — the visible frequency span
+
+### Zoom
 
 Use `Shift+Right` to zoom in and `Shift+Left` to zoom out. Zoom levels halve/double the visible span:
 
 192 kHz -> 96 -> 48 -> 24 -> 12 -> 6 -> 3 kHz
 
-The current span is shown at the bottom-right of the spectrum display.
+### Station Name Integration
+
+When [SWLScheduleTool](https://github.com/dielectric-coder/SWLScheduleTool) tunes the radio, it sends the station name to `$XDG_RUNTIME_DIR/swldemod-station.fifo`. SWL Demod Tool listens on this FIFO and displays the station name on the spectrum info line. The name clears automatically when you tune manually.
 
 ## S-Meter
 

@@ -30,9 +30,10 @@ Multiple threads cooperate:
 1. **Main thread** - Textual event loop, UI rendering, timer callbacks
 2. **IQ receive thread** - Daemon thread in SDR backend (e.g. `IQClient`), reads IQ stream, calls `_on_iq_data()` callback
 3. **Audio callback thread** - Managed by sounddevice, pulls from ring buffer
-4. **DRM audio reader thread** (DRM mode only) - Reads decoded int16 audio from Dream's stdout
-5. **DRM status socket thread** (DRM mode only) - Reads JSON status from Dream's Unix domain socket
-6. **DRM stderr drain thread** (DRM mode only) - Drains stderr to prevent pipe blocking
+4. **Station FIFO reader thread** - Daemon thread, blocks on `$XDG_RUNTIME_DIR/swldemod-station.fifo` waiting for station names from external tools (e.g. SWLScheduleTool). Updates `station_name` reactive via `call_from_thread()`.
+5. **DRM audio reader thread** (DRM mode only) - Reads decoded int16 audio from Dream's stdout
+6. **DRM status socket thread** (DRM mode only) - Reads JSON status from Dream's Unix domain socket
+7. **DRM stderr drain thread** (DRM mode only) - Drains stderr to prevent pipe blocking
 
 Data flow (AM/SSB mode):
 ```
@@ -122,6 +123,9 @@ Mode codes in IF response (char 29): 1=LSB, 2=USB, 3=CW, 4=FM, 5=AM, 7=CW-R
 - 3-frame averaging
 - Peak-hold downsampling (max per display bin) to preserve narrow signals
 - Multi-row Unicode block character rendering
+- Center marker (▲) on the info line
+- Station name from FIFO (bold gold, left side) when available
+- Span indicator (right side)
 
 **AM/SAM/SSB/CW/RTTY/PSK31/MFSK16 demodulation:**
 ```
