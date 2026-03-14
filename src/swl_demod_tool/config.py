@@ -6,6 +6,9 @@ CONFIG_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME",
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.conf")
 
 DEFAULTS = {
+    "sdr": {
+        "backend": "elad-fdmduo",
+    },
     "server": {
         "host": "localhost",
         "iq_port": "4533",

@@ -24,8 +24,7 @@ from rich.text import Text
 from swl_demod_tool import __version__
 from swl_demod_tool.config import (load_config, load_keybindings,
                                     keybindings_to_textual, _to_display_key)
-from swl_demod_tool.iq_client import IQClient
-from swl_demod_tool.cat_client import CATClient
+from swl_demod_tool.sdr import create_sdr_source, DEFAULT_BACKEND
 from swl_demod_tool.dsp import compute_spectrum_db, spectrum_to_sparkline, Demodulator
 from swl_demod_tool.audio import AudioOutput
 from swl_demod_tool.drm import DRMDecoder
@@ -374,18 +373,13 @@ class DemodApp(App):
     peak_db = reactive(-120.0)
     tune_step = reactive(1000)  # Fine tune step in Hz
 
-    def __init__(self, host="localhost", iq_port=4533, cat_port=4532,
-                 audio_device="default", keybindings=None):
+    def __init__(self, sdr_source, audio_device="default", keybindings=None):
         self._keybindings = keybindings or {}
         self._shortcut_table = _build_shortcut_table(self._keybindings)
         self._status_bar_text = _build_status_bar(self._keybindings)
         super().__init__()
-        self.host = host
-        self.iq_port = iq_port
-        self.cat_port = cat_port
         self.audio_device = audio_device
-        self.iq_client = IQClient(host, iq_port)
-        self.cat_client = CATClient(host, cat_port)
+        self.sdr = sdr_source
         self._spectrum_buf = deque(maxlen=SPECTRUM_AVG)
         self._iq_lock = threading.Lock()
 
@@ -478,7 +472,7 @@ class DemodApp(App):
         now = datetime.now(timezone.utc)
         self.utc_display = now.strftime("%H:%M:%S UTC")
         self._update_title()
-        if self.cat_client.connected:
+        if self.sdr.has_control:
             self._poll_cat()
 
     def _update_displays(self):
@@ -494,17 +488,19 @@ class DemodApp(App):
 
     def _update_conn_status(self):
         w = self.query_one("#conn-status", Static)
-        iq_icon = "[green]●[/]" if self.iq_client.connected else "[#888888]○[/]"
-        cat_icon = "[green]●[/]" if self.cat_client.connected else "[#888888]○[/]"
+        iq_icon = "[green]●[/]" if self.sdr.connected else "[#888888]○[/]"
+        ctl_icon = "[green]●[/]" if self.sdr.has_control else "[#888888]○[/]"
         audio_icon = "[green]●[/]" if self.audio.is_running else "[#888888]○[/]"
 
         rate_str = ""
-        if self.iq_client.connected:
-            rate_str = f"  {self.iq_client.sample_rate} Hz  {self.iq_client.format_bits}-bit IQ"
+        sdr_label = ""
+        if self.sdr.info:
+            rate_str = f"  {self.sdr.info.sample_rate} Hz  {self.sdr.info.sample_bits}-bit IQ"
+            sdr_label = self.sdr.info.label
 
         text = (
-            f"    IQ {iq_icon} {self.host}:{self.iq_port}{rate_str}\n"
-            f"   CAT {cat_icon} {self.host}:{self.cat_port}\n"
+            f"    IQ {iq_icon} {sdr_label}{rate_str}\n"
+            f"   CTL {ctl_icon}\n"
             f" Audio {audio_icon} {self.audio.sample_rate} Hz"
         )
         w.update(Text.from_markup(text))
@@ -523,7 +519,7 @@ class DemodApp(App):
 
     def _update_spectrum(self):
         w = self.query_one("#spectrum-display", Static)
-        if not self.iq_client.connected or len(self._spectrum_buf) == 0:
+        if not self.sdr.connected or len(self._spectrum_buf) == 0:
             w.update("  Spectrum: [no data]")
             return
 
@@ -550,7 +546,7 @@ class DemodApp(App):
         center = width // 2
 
         # Bandwidth underline centered on the marker
-        sample_rate = self.iq_client.sample_rate if self.iq_client.sample_rate > 0 else 192000
+        sample_rate = self.sdr.info.sample_rate if self.sdr.info and self.sdr.info.sample_rate > 0 else 192000
         span_hz = sample_rate * self._spectrum_zoom
         bw = self.demod.bandwidth if self.demod.mode != "DRM" else 10000
         bw_half = max(1, int(bw / span_hz * width) // 2)
@@ -830,29 +826,27 @@ class DemodApp(App):
     def _get_active_freq(self, vfo=None):
         """Query frequency for the given or current VFO."""
         vfo = vfo or self.active_vfo
-        if vfo == "B":
-            return self.cat_client.get_vfo_b_freq()
-        return self.cat_client.get_vfo_a_freq()
+        return self.sdr.get_frequency(vfo)
 
     # --- CAT polling ---
 
     @work(thread=True)
     def _poll_cat(self):
-        if self._cat_polling or not self.cat_client.connected:
+        if self._cat_polling or not self.sdr.has_control:
             return
         self._cat_polling = True
         try:
-            vfo = self.cat_client.get_active_vfo()
+            vfo = self.sdr.get_active_vfo()
             if vfo is not None:
                 self.call_from_thread(setattr, self, "active_vfo", vfo)
             freq = self._get_active_freq(vfo)
             if freq is not None:
                 self.call_from_thread(self._apply_cat_update, freq)
-            sm = self.cat_client.get_s_meter()
+            sm = self.sdr.get_s_meter()
             if sm is not None:
                 with self._s_lock:
                     self._s_unit, self._s_raw = sm
-            if not self.cat_client.connected:
+            if not self.sdr.has_control:
                 self.call_from_thread(self._update_conn_status)
         finally:
             self._cat_polling = False
@@ -869,14 +863,13 @@ class DemodApp(App):
 
     @work(thread=True)
     def _do_connect(self):
-        # Connect IQ
-        if not self.iq_client.connected:
-            ok = self.iq_client.connect()
+        if not self.sdr.connected:
+            ok = self.sdr.connect()
             self.call_from_thread(self._update_conn_status)
             if ok:
-                # Update demod sample rate from server
-                if self.iq_client.sample_rate > 0:
-                    sr = self.iq_client.sample_rate
+                # Update demod sample rate from SDR
+                if self.sdr.info and self.sdr.info.sample_rate > 0:
+                    sr = self.sdr.info.sample_rate
                     self.demod.iq_sample_rate = sr
                     self.demod.decimation = sr // self.demod.audio_rate
                     self.demod.set_bandwidth(self.demod.bandwidth)
@@ -887,24 +880,20 @@ class DemodApp(App):
                     self.drm.start(audio_callback=self._on_drm_audio)
                 self.call_from_thread(self._update_conn_status)
                 # Start IQ streaming
-                self.iq_client.start_streaming(self._on_iq_data)
+                self.sdr.start_streaming(self._on_iq_data)
 
-        # Connect CAT
-        if not self.cat_client.connected:
-            self.cat_client.connect()
-            self.call_from_thread(self._update_conn_status)
-            if self.cat_client.connected:
-                vfo = self.cat_client.get_active_vfo()
-                if vfo:
-                    self.call_from_thread(setattr, self, "active_vfo", vfo)
-                freq = self._get_active_freq(vfo)
-                if freq:
-                    self.call_from_thread(setattr, self, "frequency_hz", freq)
-                self.call_from_thread(self._update_radio_info)
+        # Query radio control if available
+        if self.sdr.has_control:
+            vfo = self.sdr.get_active_vfo()
+            if vfo:
+                self.call_from_thread(setattr, self, "active_vfo", vfo)
+            freq = self._get_active_freq(vfo)
+            if freq:
+                self.call_from_thread(setattr, self, "frequency_hz", freq)
+            self.call_from_thread(self._update_radio_info)
 
     def action_disconnect(self):
-        self.iq_client.disconnect()
-        self.cat_client.disconnect()
+        self.sdr.disconnect()
         self.audio.stop()
         self.drm.stop()
         self.demod.reset()
@@ -1136,7 +1125,7 @@ class DemodApp(App):
 
     def action_toggle_vfo(self):
         """Switch between VFO-A and VFO-B."""
-        if not self.cat_client.connected:
+        if not self.sdr.has_control:
             return
         new_vfo = "B" if self.active_vfo == "A" else "A"
         self._do_set_vfo(new_vfo)
@@ -1144,7 +1133,7 @@ class DemodApp(App):
     @work(thread=True)
     def _do_set_vfo(self, vfo):
         """Send VFO switch command to radio in a worker thread."""
-        if self.cat_client.set_active_vfo(vfo):
+        if self.sdr.set_active_vfo(vfo):
             self.call_from_thread(setattr, self, "active_vfo", vfo)
             freq = self._get_active_freq(vfo)
             if freq is not None:
@@ -1154,7 +1143,7 @@ class DemodApp(App):
 
     def _tune_offset(self, offset_hz):
         """Tune the radio by an offset from current frequency."""
-        if not self.cat_client.connected or self.frequency_hz <= 0:
+        if not self.sdr.has_control or self.frequency_hz <= 0:
             return
         new_freq = self.frequency_hz + offset_hz
         if new_freq < 0:
@@ -1164,10 +1153,7 @@ class DemodApp(App):
     @work(thread=True)
     def _do_tune(self, freq_hz):
         """Send tune command to radio in a worker thread."""
-        if self.active_vfo == "B":
-            ok = self.cat_client.set_frequency_b(freq_hz)
-        else:
-            ok = self.cat_client.set_frequency(freq_hz)
+        ok = self.sdr.set_frequency(freq_hz, vfo=self.active_vfo)
         if ok:
             self.call_from_thread(self._apply_tune, freq_hz)
 
@@ -1188,7 +1174,7 @@ class DemodApp(App):
             freq_hz = int(freq_khz * 1000)
         except ValueError:
             return
-        if 0 < freq_hz <= 2_000_000_000 and self.cat_client.connected:
+        if 0 < freq_hz <= 2_000_000_000 and self.sdr.has_control:
             self._do_tune(freq_hz)
         event.input.value = ""
         self.set_focus(None)
@@ -1211,8 +1197,7 @@ class DemodApp(App):
     def on_unmount(self):
         self.audio.stop()
         self.drm.stop()
-        self.iq_client.disconnect()
-        self.cat_client.disconnect()
+        self.sdr.disconnect()
         # Clean up spectrum display
         if self._spectrum_fifo_fd >= 0:
             try:
@@ -1225,6 +1210,8 @@ class DemodApp(App):
 
 def main():
     parser = argparse.ArgumentParser(description="SWL Demod Tool - TUI IQ demodulator")
+    parser.add_argument("--sdr", default=None,
+                        help=f"SDR backend (default: from config or {DEFAULT_BACKEND})")
     parser.add_argument("--host", default=None, help="Server host (default: from config)")
     parser.add_argument("--iq-port", type=int, default=None, help="IQ server port")
     parser.add_argument("--cat-port", type=int, default=None, help="CAT server port")
@@ -1244,15 +1231,15 @@ def main():
             format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
     config = load_config()
-    host = args.host or config.get("server", "host")
-    iq_port = args.iq_port or config.getint("server", "iq_port")
-    cat_port = args.cat_port or config.getint("server", "cat_port")
+    backend = args.sdr or config.get("sdr", "backend", fallback=DEFAULT_BACKEND)
+    sdr_source = create_sdr_source(backend, config, args)
+
     audio_device = args.audio_device or config.get("audio", "device")
     dream_path = config.get("drm", "dream_path", fallback="") or None
     keybindings = load_keybindings(config)
 
-    app = DemodApp(host=host, iq_port=iq_port, cat_port=cat_port,
-                   audio_device=audio_device, keybindings=keybindings)
+    app = DemodApp(sdr_source=sdr_source, audio_device=audio_device,
+                   keybindings=keybindings)
     app.drm.dream_path = app.drm.dream_path or dream_path
     app.run()
 

@@ -6,7 +6,8 @@ A native C/GTK4 GUI port is available separately as [HFDemodGTK](https://github.
 
 ## Prerequisites
 
-- An Elad FDM-DUO with IQ and CAT TCP servers running (e.g., via [EladSpectrum](https://github.com/mikewam/EladSpectrum))
+- A supported SDR (currently Elad FDM-DUO; more backends planned)
+- For Elad FDM-DUO: IQ and CAT TCP servers running (e.g., via [EladSpectrum](https://github.com/mikewam/EladSpectrum))
 - A working audio output device
 - Python 3.10+
 - For DRM mode: the [Dream](http://drm.sourceforge.net) DRM decoder binary
@@ -47,18 +48,30 @@ The app looks for Dream at `../DRM/dream-2.2/dream` (relative to the project) or
 swl-demod
 ```
 
-The app auto-connects on startup to `localhost:4533` (IQ) and `localhost:4532` (CAT).
+The app auto-connects on startup using the selected SDR backend (default: Elad FDM-DUO at `localhost:4533`/`4532`).
 
 ### Command-Line Options
 
 | Option           | Description                        | Default        |
 |------------------|------------------------------------|----------------|
-| `--host`         | Server hostname or IP              | from config    |
-| `--iq-port`      | IQ stream TCP port                 | 4533           |
-| `--cat-port`     | CAT control TCP port               | 4532           |
+| `--sdr`          | SDR backend to use                 | `elad-fdmduo`  |
+| `--host`         | Server hostname or IP (Elad)       | from config    |
+| `--iq-port`      | IQ stream TCP port (Elad)          | 4533           |
+| `--cat-port`     | CAT control TCP port (Elad)        | 4532           |
 | `--audio-device` | Audio output device name           | default        |
 | `--version`      | Show version and exit              |                |
 | `--debug`        | Enable debug logging to `swl-demod.log` |           |
+
+### SDR Backends
+
+| Backend          | Description                              |
+|------------------|------------------------------------------|
+| `elad-fdmduo`    | Elad FDM-DUO via TCP IQ + CAT server (default) |
+
+Select a backend with `--sdr`:
+```bash
+swl-demod --sdr elad-fdmduo --host 192.168.1.10
+```
 
 ## Keyboard Controls
 
@@ -90,10 +103,10 @@ The app auto-connects on startup to `localhost:4533` (IQ) and `localhost:4532` (
 ## Display Layout
 
 ```
-  SWL Demod Tool v0.4.0     12:34:56 UTC
+  SWL Demod Tool v0.5.0     12:34:56 UTC
   ╭─░▒▓  Freq ► ╰─⏺ [kHz]
-    IQ ● localhost:4533  192000 Hz 32-bit IQ
-   CAT ● localhost:4532
+    IQ ● Elad FDM-DUO  localhost:4533  192000 Hz 32-bit IQ
+   CTL ●
  Audio ● 48000 Hz
   VFO: A    Frequency: 7.100000 MHz    Mode: CW+    BW: 500 Hz
   ▁▁▂▂▃▅▇█▇▅▃▂▂▁▁▁   (9-row spectrum graph)
@@ -242,6 +255,9 @@ The S-meter reads signal strength directly from the radio via CAT command (`SM0;
 Configuration is stored at `$XDG_CONFIG_HOME/swl-demod-tool/config.conf` (typically `~/.config/swl-demod-tool/config.conf`).
 
 ```ini
+[sdr]
+backend = elad-fdmduo
+
 [server]
 host = localhost
 iq_port = 4533
@@ -256,7 +272,7 @@ buffer_size = 1024
 dream_path = /path/to/dream
 ```
 
-The `[drm]` section is optional. If `dream_path` is empty or omitted, the app searches for Dream automatically.
+The `[sdr]` section selects the SDR backend. The `[server]` section provides connection details for the Elad backend. The `[drm]` section is optional — if `dream_path` is empty or omitted, the app searches for Dream automatically.
 
 The `[noise_reduction]` section stores noise reduction defaults:
 

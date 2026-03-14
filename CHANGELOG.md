@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.0] - 2026-03-14
+
+### Added
+- **Pluggable SDR backend architecture**: New `sdr/` package with abstract `SDRSource` base class, allowing multiple SDR hardware backends. IQ streaming and radio control are unified behind a single interface. Backends are selected at startup via `--sdr <name>` CLI argument or `[sdr] backend` config option.
+- **Elad FDM-DUO backend** (`--sdr elad-fdmduo`): Default backend wrapping the existing TCP IQ and CAT clients. Fully backward-compatible — existing config and CLI options (`--host`, `--iq-port`, `--cat-port`) continue to work unchanged.
+- **Backend registry with lazy imports**: New backends can be added by implementing `SDRSource` and registering in `sdr/registry.py`. Backend-specific dependencies are only imported when that backend is selected, so unused backends don't require their libraries to be installed.
+- `[sdr]` config section with `backend` option (default: `elad-fdmduo`)
+
+### Changed
+- `DemodApp` constructor takes an `SDRSource` instance instead of separate host/port parameters
+- Connection status display shows generic SDR label and control status instead of hardcoded host:port lines
+- All IQ/CAT references in `app.py` replaced with `SDRSource` interface calls
+
 ## [0.4.8] - 2026-03-12
 
 ### Fixed

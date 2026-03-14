@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-SWL Demod Tool — Terminal UI demodulator for the Elad FDM-DUO software-defined radio, built with Python and Textual. Connects to an IQ sample server and CAT control server over TCP, demodulates AM/SSB/CW/RTTY/PSK31/MFSK16/DRM audio, and displays a live spectrum.
+SWL Demod Tool — Terminal UI SDR demodulator with pluggable backends, built with Python and Textual. Supports multiple SDR hardware via a backend abstraction (`sdr/` package). Demodulates AM/SSB/CW/RTTY/PSK31/MFSK16/DRM audio and displays a live spectrum. Default backend: Elad FDM-DUO via TCP IQ + CAT server.
 
 A native C/GTK4 GUI port is available separately as [HFDemodGTK](https://github.com/dielectric-coder/HFDemodGTK).
 
@@ -17,9 +17,9 @@ pip install -e .
 # Install with optional DSP accelerators (pyfftw + numba)
 pip install -e ".[accel]"
 
-# Run
+# Run (default Elad backend)
 swl-demod
-swl-demod --host 192.168.1.10 --iq-port 4533 --cat-port 4532 --audio-device default
+swl-demod --sdr elad-fdmduo --host 192.168.1.10 --iq-port 4533 --cat-port 4532 --audio-device default
 
 # No tests exist yet. No linter is configured.
 ```
@@ -30,9 +30,13 @@ Real-time data pipeline: **IQ network stream -> DSP -> audio output**, with a Te
 
 ### Module Responsibilities
 
-- **`app.py`** — Textual `App` subclass (`DemodApp`). TUI layout, keybindings, periodic UI refresh (1s tick + 100ms display update), coordinates all components. Entry point is `main()`.
-- **`iq_client.py`** — TCP client for the Elad Spectrum IQ server. Reads a 16-byte `ELAD` magic header (sample rate, bit depth), then streams 12288-byte chunks of 32-bit signed int IQ pairs, converting to normalized `complex64`. Daemon thread with callback delivery.
-- **`cat_client.py`** — TCP client for CAT control. Kenwood-style commands (`;`-terminated). Polls VFO (`FR;`), frequency (`FA;`/`FB;`), and S-meter (`SM0;`). Supports VFO-A/B switching and tuning.
+- **`app.py`** — Textual `App` subclass (`DemodApp`). TUI layout, keybindings, periodic UI refresh (1s tick + 100ms display update), coordinates all components. Entry point is `main()`. Uses `SDRSource` abstraction for all IQ/control operations.
+- **`sdr/`** — Pluggable SDR backend package:
+  - **`base.py`** — `SDRSource` ABC (connect/disconnect/stream + optional radio control) and `SDRInfo` dataclass.
+  - **`elad_fdmduo.py`** — Elad FDM-DUO backend wrapping `IQClient` + `CATClient`.
+  - **`registry.py`** — Backend map and `create_sdr_source()` factory with lazy imports.
+- **`iq_client.py`** — TCP client for the Elad Spectrum IQ server (used internally by the Elad backend). Reads a 16-byte `ELAD` magic header (sample rate, bit depth), then streams 12288-byte chunks of 32-bit signed int IQ pairs, converting to normalized `complex64`. Daemon thread with callback delivery.
+- **`cat_client.py`** — TCP client for CAT control (used internally by the Elad backend). Kenwood-style commands (`;`-terminated). Polls VFO (`FR;`), frequency (`FA;`/`FB;`), and S-meter (`SM0;`). Supports VFO-A/B switching and tuning.
 - **`dsp.py`** — FFT spectrum (Blackman window, 4096-point), multi-row Unicode bar chart with peak-hold downsampling, and `Demodulator` class (FIR lowpass -> decimate -> AM/SSB/CW/RTTY/PSK31/MFSK16 detection -> DC removal -> AGC). CW modes include two-stage filtering, BFO tone mixing, tone detection with SNR measurement, and keying speed estimation. RTTY uses dual bandpass mark/space filters with Baudot decoder. PSK31 uses NCO downconversion with differential phase detection and Varicode decoder. MFSK16 uses FFT tone detection with soft-decision Viterbi FEC and IZ8BLY MFSK Varicode.
 - **`drm.py`** — DRM decoder integration. Spawns the Dream 2.2 decoder as a subprocess using stdin/stdout pipes (`-I -` / `-O -`). Feeds raw int16 stereo IQ to Dream's stdin, reads decoded audio from stdout, reads JSON status from a Unix domain socket (`--status-socket`).
 - **`audio.py`** — `sounddevice` OutputStream with manual ring buffer. Handles underruns with silence.
@@ -40,7 +44,7 @@ Real-time data pipeline: **IQ network stream -> DSP -> audio output**, with a Te
 
 ### Threading Model
 
-Multiple threads cooperate: main Textual event loop, IQ receive daemon thread (`IQClient`), sounddevice audio callback thread, and in DRM mode three additional threads (Dream audio reader, status socket reader, stderr drain). IQ data flows from network thread into `_on_iq_data()` which does DSP and pushes audio to the ring buffer (or pipes IQ to Dream in DRM mode). UI updates marshalled via `call_from_thread()`. The audio ring buffer is lock-free (single-writer/single-reader). `Demodulator._lock` protects shared UI/IQ thread state. `DRMDecoder._lock` protects process handle and status dict.
+Multiple threads cooperate: main Textual event loop, IQ receive daemon thread (SDR backend, e.g. `IQClient`), sounddevice audio callback thread, and in DRM mode three additional threads (Dream audio reader, status socket reader, stderr drain). IQ data flows from the SDR backend thread into `_on_iq_data()` which does DSP and pushes audio to the ring buffer (or pipes IQ to Dream in DRM mode). UI updates marshalled via `call_from_thread()`. The audio ring buffer is lock-free (single-writer/single-reader). `Demodulator._lock` protects shared UI/IQ thread state. `DRMDecoder._lock` protects process handle and status dict.
 
 ### Key Constants
 

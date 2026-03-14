@@ -6,8 +6,13 @@
 src/swl_demod_tool/
     __init__.py       # Version string
     app.py            # Textual TUI application (entry point: main())
-    iq_client.py      # TCP client for IQ sample stream
-    cat_client.py     # TCP client for CAT radio control
+    sdr/              # Pluggable SDR backend package
+        __init__.py   # Package exports (SDRSource, SDRInfo, create_sdr_source)
+        base.py       # Abstract SDRSource base class and SDRInfo dataclass
+        elad_fdmduo.py# Elad FDM-DUO backend (wraps IQClient + CATClient)
+        registry.py   # Backend registry and factory function
+    iq_client.py      # TCP client for Elad IQ sample stream (used by elad_fdmduo backend)
+    cat_client.py     # TCP client for Elad CAT radio control (used by elad_fdmduo backend)
     dsp.py            # DSP: FFT spectrum, sparkline rendering, AM/SSB/CW/RTTY/PSK31/MFSK16 demodulator, noise reduction
     drm.py            # DRM decoder integration (Dream subprocess)
     audio.py          # Audio output via sounddevice with ring buffer
@@ -23,7 +28,7 @@ Real-time data pipeline: **IQ network stream -> DSP -> audio output**, with a Te
 Multiple threads cooperate:
 
 1. **Main thread** - Textual event loop, UI rendering, timer callbacks
-2. **IQ receive thread** - Daemon thread in `IQClient`, reads TCP stream, calls `_on_iq_data()` callback
+2. **IQ receive thread** - Daemon thread in SDR backend (e.g. `IQClient`), reads IQ stream, calls `_on_iq_data()` callback
 3. **Audio callback thread** - Managed by sounddevice, pulls from ring buffer
 4. **DRM audio reader thread** (DRM mode only) - Reads decoded int16 audio from Dream's stdout
 5. **DRM status socket thread** (DRM mode only) - Reads JSON status from Dream's Unix domain socket
@@ -31,14 +36,14 @@ Multiple threads cooperate:
 
 Data flow (AM/SSB mode):
 ```
-IQ TCP stream -> IQClient._receive_loop() -> DemodApp._on_iq_data()
+SDR backend -> SDRSource.start_streaming(callback) -> DemodApp._on_iq_data()
     -> compute_spectrum_db() -> spectrum buffer (for display)
     -> Demodulator.process() -> AudioOutput.write() -> ring buffer -> speakers
 ```
 
 Data flow (DRM mode):
 ```
-IQ TCP stream -> IQClient._receive_loop() -> DemodApp._on_iq_data()
+SDR backend -> SDRSource.start_streaming(callback) -> DemodApp._on_iq_data()
     -> compute_spectrum_db() -> spectrum buffer (for display)
     -> DRMDecoder.write_iq() -> Dream stdin (int16 stereo IQ)
                                 Dream stdout -> _read_audio() -> AudioOutput.write() -> ring buffer -> speakers
@@ -54,7 +59,21 @@ UI updates from background threads are marshalled via `call_from_thread()`.
 - **`DRMDecoder._lock`** protects `self._process` (preventing race between `write_iq` and `stop`) and `self.status` dict.
 - **`_cat_polling` flag** in `DemodApp` prevents concurrent `_poll_cat` worker threads from accumulating when the CAT server is slow.
 
-### IQ Protocol
+### SDR Backend Architecture
+
+The `sdr/` package provides a pluggable backend system:
+
+- **`SDRSource`** (ABC) — Defines the interface: `connect()`, `disconnect()`, `start_streaming(callback)`, plus optional radio control methods (`get_frequency()`, `set_frequency()`, `get_active_vfo()`, `set_active_vfo()`, `get_s_meter()`, `get_mode()`). IQ-only backends need only implement the streaming methods; control methods default to no-ops.
+- **`SDRInfo`** — Dataclass returned by `SDRSource.info` after connection: `sample_rate`, `sample_bits`, `label`.
+- **`create_sdr_source(name, config, args)`** — Factory function with lazy imports. Backend-specific dependencies are only loaded when selected.
+- **`EladFDMDuoSource`** — Wraps `IQClient` + `CATClient` as a single `SDRSource`. The existing TCP clients are unchanged.
+
+To add a new backend:
+1. Create `sdr/<name>.py` implementing `SDRSource`
+2. Register it in `sdr/registry.py`
+3. Add backend-specific construction logic in `create_sdr_source()`
+
+### Elad IQ Protocol
 
 The Elad Spectrum IQ server sends:
 1. 16-byte header: `ELAD` magic (4B) + sample rate (4B, uint32) + format bits (4B, uint32) + reserved (4B)
@@ -62,7 +81,7 @@ The Elad Spectrum IQ server sends:
 
 Samples are normalized to float32 [-1, 1] range by dividing by 2^31.
 
-### CAT Protocol
+### Elad CAT Protocol
 
 Kenwood TS-480 compatible, semicolon-terminated ASCII commands over TCP.
 
@@ -208,4 +227,4 @@ pip install -e .
 swl-demod --host <server-ip>
 ```
 
-Requires an Elad Spectrum IQ+CAT server (e.g., from [EladSpectrum](https://github.com/mikewam/EladSpectrum)).
+Default backend requires an Elad Spectrum IQ+CAT server (e.g., from [EladSpectrum](https://github.com/mikewam/EladSpectrum)). Select backend with `--sdr <name>`.
