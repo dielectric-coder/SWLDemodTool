@@ -33,6 +33,10 @@ from swl_demod_tool.drm import DRMDecoder
 SPECTRUM_AVG = 3
 SPECTRUM_FIFO = "/tmp/swl-spectrum.fifo"
 FFT_SIZE = 4096
+STATION_FIFO = os.path.join(
+    os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"),
+    "swldemod-station.fifo",
+)
 
 
 CSS = """
@@ -456,6 +460,7 @@ class DemodApp(App):
     active_vfo = reactive("--")
     peak_db = reactive(-120.0)
     tune_step = reactive(1000)  # Fine tune step in Hz
+    station_name = reactive("")  # Station name from external scheduler
 
     def __init__(self, sdr_source, audio_device="default", keybindings=None, config=None):
         self._keybindings = keybindings or {}
@@ -501,6 +506,10 @@ class DemodApp(App):
         # Spectrum display subprocess
         self._spectrum_proc = None
         self._spectrum_fifo_fd = -1
+
+        # Station name FIFO listener
+        self._station_fifo_stop = threading.Event()
+        self._station_fifo_thread = None
 
     def compose(self):
         yield Static(id="title-bar")
@@ -549,6 +558,10 @@ class DemodApp(App):
         self._update_all()
         self.set_interval(1, self._tick)
         self.set_interval(0.1, self._update_displays)
+        # Start station name FIFO listener
+        self._station_fifo_thread = threading.Thread(
+            target=self._station_fifo_reader, daemon=True)
+        self._station_fifo_thread.start()
         # Auto-connect on start
         self.action_connect()
 
@@ -567,6 +580,33 @@ class DemodApp(App):
         self._update_title()
         if self.sdr.has_control:
             self._poll_cat()
+
+    def _station_fifo_reader(self):
+        """Daemon thread: read station names from FIFO."""
+        path = STATION_FIFO
+        # Create FIFO if it doesn't exist
+        if not os.path.exists(path):
+            try:
+                os.mkfifo(path)
+            except OSError:
+                return
+        elif not stat.S_ISFIFO(os.stat(path).st_mode):
+            return
+        while not self._station_fifo_stop.is_set():
+            try:
+                # Blocking open — waits for a writer
+                with open(path, "r") as f:
+                    for line in f:
+                        if self._station_fifo_stop.is_set():
+                            break
+                        name = line.strip()
+                        if name:
+                            self.call_from_thread(setattr, self, "station_name", name)
+                # Writer closed — reopen to wait for next writer
+            except OSError:
+                if self._station_fifo_stop.is_set():
+                    break
+                self._station_fifo_stop.wait(1)
 
     def _update_displays(self):
         """Periodic UI refresh for fast-changing displays."""
@@ -663,17 +703,32 @@ class DemodApp(App):
                 bw_bar[i] = "▁"
         bw_line = "".join(bw_bar)
 
-        # Show center frequency and visible span
+        # Show center frequency, station name, and visible span
         freq_str = ""
         if self.frequency_hz > 0:
             freq_str = f"{self.frequency_hz / 1e6:.3f}"
         span_khz = span_hz / 1000
         span_str = f"Span: {span_khz:.0f} kHz"
 
+        # Build info line: freq on left, station name centered, span on right
+        stn = self.station_name
+        left_pad = max(0, center - len(freq_str) // 2)
+        if stn:
+            # Truncate station name to fit available space
+            avail = width - len(freq_str) - len(span_str) - 4
+            if len(stn) > avail:
+                stn = stn[:max(0, avail - 1)] + "…"
+            mid_gap = max(1, width - left_pad - len(freq_str) - len(span_str))
+            # Center station name within the middle gap
+            stn_pad = max(1, (mid_gap - len(stn)) // 2)
+            info_line = f"  {' ' * left_pad}{freq_str}{' ' * stn_pad}[bold #f0c674]{stn}[/]{' ' * max(1, mid_gap - stn_pad - len(stn))}{span_str}"
+        else:
+            info_line = f"  {' ' * left_pad}{freq_str}{' ' * max(1, width - left_pad - len(freq_str) - len(span_str))}{span_str}"
+
         w.update(
             f"{indented}\n"
             f"  {bw_line}\n"
-            f"  {'':>{center - len(freq_str)//2}}{freq_str}{'':>{max(1, width - center - len(freq_str)//2 - len(span_str))}}{span_str}"
+            f"{info_line}"
         )
 
     def _cw_tuning_bar(self, width=20):
@@ -1327,6 +1382,7 @@ class DemodApp(App):
 
     def _apply_tune(self, freq_hz):
         self.frequency_hz = freq_hz
+        self.station_name = ""
         self._update_radio_info()
         self._spectrum_update()
 
@@ -1363,6 +1419,8 @@ class DemodApp(App):
         self.push_screen(HelpScreen(self._shortcut_table, help_key))
 
     def on_unmount(self):
+        # Stop station FIFO listener
+        self._station_fifo_stop.set()
         # Save mode and bandwidth to config
         if self._config:
             if not self._config.has_section("state"):
