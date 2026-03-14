@@ -1275,6 +1275,12 @@ class Demodulator:
         with self._lock:
             return self._nb_threshold_name
 
+    def set_nb_threshold(self, name):
+        """Set NB threshold by name (Low/Med/High)."""
+        with self._lock:
+            self._nb_threshold_name = name
+            self._nb_threshold = _NB_THRESHOLD_PRESETS[name]
+
     def cycle_nb_threshold(self):
         """Cycle NB threshold through Low -> Med -> High -> Low."""
         names = ["Low", "Med", "High"]

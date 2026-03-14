@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.4] - 2026-03-14
+
+### Added
+- **Automatic station name lookup**: On frequency change, looks up `sked-current.csv` from SWLScheduleTool to display the currently on-air station name. FIFO-based names from SWLScheduleTool take priority.
+- **RIT step selector** (`f`): Cycle RIT step through 1 / 10 / 100 Hz. Current step displayed alongside RIT offset.
+- **Scrollable help window**: PgUp/PgDn scroll the keyboard shortcuts help panel.
+
+### Changed
+- **Keybinding defaults revised**: `m` = mode (was `x`), `0` = mute (was `m`), `s` = tune step (was `g`), `d` = spectrum display (was `s`), `x` = disconnect (was `d`), `↑`/`↓` = RIT (was PgUp/PgDn).
+- **Noise blanker**: `n` now cycles Off → Low → Med → High → Off (merged toggle and threshold). `N` (Shift+N) cycles DNR level (was `f`).
+- **CW tuning indicator**: Changed to odd width (21) for symmetrical display around center.
+
 ## [0.5.3] - 2026-03-14
 
 ### Added

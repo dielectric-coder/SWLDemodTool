@@ -3,6 +3,7 @@
 """SWL Demod Tool - TUI demodulator for Elad FDM-DUO IQ stream."""
 
 import argparse
+import csv
 import errno
 import logging
 import os
@@ -14,7 +15,7 @@ from collections import deque
 from datetime import datetime, timezone
 
 from textual.app import App
-from textual.containers import Container, Horizontal, Vertical
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Input, Static, OptionList
 from textual.widgets.option_list import Option
@@ -37,6 +38,64 @@ STATION_FIFO = os.path.join(
     os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"),
     "swldemod-station.fifo",
 )
+
+# SWLScheduleTool schedule CSV search paths
+_SKED_CSV_CANDIDATES = [
+    os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                 "..", "..", "..", "SWLScheduleTool", "src",
+                 "eibi_swl", "swl-schedules-data", "sked-current.csv"),
+    os.path.join(os.environ.get("XDG_DATA_HOME",
+                 os.path.expanduser("~/.local/share")),
+                 "eibi-swl", "sked-current.csv"),
+]
+
+
+def _find_sked_csv():
+    """Locate the SWLScheduleTool schedule CSV file."""
+    for path in _SKED_CSV_CANDIDATES:
+        resolved = os.path.realpath(path)
+        if os.path.isfile(resolved):
+            return resolved
+    return None
+
+
+def _lookup_station(freq_hz):
+    """Look up active station name from SWLScheduleTool schedule.
+
+    Returns the station name if a broadcast is currently on-air at the
+    given frequency, or empty string if none found.
+    """
+    csv_path = _find_sked_csv()
+    if csv_path is None:
+        return ""
+    freq_khz = str(freq_hz / 1000).rstrip("0").rstrip(".")
+    now_utc = datetime.now(timezone.utc)
+    current_time = int(now_utc.strftime("%H%M"))
+    try:
+        with open(csv_path, "r", encoding="utf-8") as f:
+            reader = csv.reader(f, delimiter=";")
+            next(reader, None)  # skip header
+            for row in reader:
+                if len(row) < 5 or row[0].strip() != freq_khz:
+                    continue
+                time_range = row[1] if len(row) > 1 else ""
+                if "-" not in time_range:
+                    continue
+                try:
+                    start_s, end_s = time_range.split("-")
+                    start_t, end_t = int(start_s), int(end_s)
+                except (ValueError, IndexError):
+                    continue
+                duration = end_t - start_t
+                if duration < 0:
+                    is_active = (current_time >= start_t) or (current_time < end_t)
+                else:
+                    is_active = start_t <= current_time < end_t
+                if is_active:
+                    return row[4].strip()
+    except OSError:
+        pass
+    return ""
 
 
 CSS = """
@@ -159,6 +218,13 @@ HELP_CSS = """
     color: #769ff0;
 }
 
+#help-scroll {
+    width: 100%;
+    height: auto;
+    max-height: 100%;
+    overflow-y: auto;
+}
+
 #help-body {
     width: 100%;
 }
@@ -196,10 +262,10 @@ KEYBINDING_META = {
     "select_tune_step":  ("Select tune step",            "Tuning",          "Step"),
     "rit_up":            ("RIT offset up",               "Tuning",          None),
     "rit_down":          ("RIT offset down",             "Tuning",          None),
+    "select_rit_step":   ("Cycle RIT step 1/10/100 Hz",  "Tuning",          "RIT"),
     "select_vfo":        ("Select VFO",                  "Tuning",          "VFO"),
     "clear_cw_text":     ("Clear CW decoded text",       "CW",              None),
-    "toggle_nb":         ("Toggle noise blanker",        "Noise Reduction", "NB"),
-    "cycle_nb_threshold":("Cycle NB threshold",          "Noise Reduction", "NB Thr"),
+    "toggle_nb":         ("Cycle NB Off/Low/Med/High",   "Noise Reduction", "NB"),
     "cycle_dnr":         ("Cycle spectral DNR level",    "Noise Reduction", "DNR"),
     "toggle_auto_notch": ("Toggle auto notch filter",    "Noise Reduction", "DNF"),
     "toggle_apf":        ("Toggle CW audio peak filter", "CW",              "APF"),
@@ -273,6 +339,8 @@ class HelpScreen(ModalScreen):
     CSS = HELP_CSS
     BINDINGS = [
         ("escape", "dismiss", "Close"),
+        ("pageup", "scroll_up", "Scroll Up"),
+        ("pagedown", "scroll_down", "Scroll Down"),
     ]
 
     def __init__(self, shortcut_table, help_key="?"):
@@ -295,13 +363,20 @@ class HelpScreen(ModalScreen):
                 lines.append(f"  [#769ff0]{key:<22}[/] {desc}")
             lines.append("")
         body = "\n".join(lines).rstrip()
-        hint = f"Press Escape or {self._help_key_display} to close"
+        hint = f"PgUp/PgDn: scroll \u00b7 Escape or {self._help_key_display}: close"
 
         with Container(id="help-container"):
             with Container(id="help-card"):
                 yield Static("Keyboard Shortcuts", id="help-title")
-                yield Static(body, id="help-body")
+                with VerticalScroll(id="help-scroll"):
+                    yield Static(body, id="help-body")
                 yield Static(hint, id="help-hint")
+
+    def action_scroll_up(self):
+        self.query_one("#help-scroll").scroll_page_up()
+
+    def action_scroll_down(self):
+        self.query_one("#help-scroll").scroll_page_down()
 
 
 SELECTOR_CSS = """
@@ -425,9 +500,9 @@ class DemodApp(App):
         ("escape", "unfocus", "Unfocus"),
         ("question_mark", "show_help", "Help"),
         ("c", "connect", "Connect"),
-        ("d", "disconnect", "Disc"),
+        ("x", "disconnect", "Disc"),
         ("r", "reconnect", "Recon"),
-        ("m", "toggle_mute", "Mute"),
+        ("0", "toggle_mute", "Mute"),
         ("a", "toggle_agc", "AGC"),
         ("plus", "volume_up", "Gain+"),
         ("minus", "volume_down", "Gain\u2212"),
@@ -438,24 +513,25 @@ class DemodApp(App):
         ("right", "tune_up", "Tune+"),
         ("left", "tune_down", "Tune\u2212"),
         ("slash", "focus_freq", "Freq"),
-        ("x", "select_mode", "Mode"),
+        ("m", "select_mode", "Mode"),
         ("b", "select_bw", "BW"),
-        ("g", "select_tune_step", "Step"),
-        ("pageup", "rit_up", "RIT+"),
-        ("pagedown", "rit_down", "RIT\u2212"),
+        ("s", "select_tune_step", "Step"),
+        ("up", "rit_up", "RIT+"),
+        ("down", "rit_down", "RIT\u2212"),
+        ("f", "select_rit_step", "RIT"),
         ("v", "select_vfo", "VFO"),
         ("t", "clear_cw_text", "ClrTxt"),
         ("p", "toggle_apf", "APF"),
         ("n", "toggle_nb", "NB"),
-        ("N", "cycle_nb_threshold", "NB Thr"),
-        ("f", "cycle_dnr", "DNR"),
+        ("N", "cycle_dnr", "DNR"),
         ("alt+n", "toggle_auto_notch", "DNF"),
-        ("s", "toggle_spectrum", "Spec"),
+        ("d", "toggle_spectrum", "Spec"),
     ]
 
     utc_display = reactive("--:-- UTC")
     frequency_hz = reactive(0)
     rit_offset = reactive(0)  # Cumulative RIT offset in Hz
+    rit_step = reactive(10)  # RIT step size in Hz (1 or 10)
 
     active_vfo = reactive("--")
     peak_db = reactive(-120.0)
@@ -510,6 +586,9 @@ class DemodApp(App):
         # Station name FIFO listener
         self._station_fifo_stop = threading.Event()
         self._station_fifo_thread = None
+
+        # Schedule lookup: track last queried frequency to avoid redundant lookups
+        self._sked_last_freq = 0
 
     def compose(self):
         yield Static(id="title-bar")
@@ -717,7 +796,7 @@ class DemodApp(App):
             f"{info_line}"
         )
 
-    def _cw_tuning_bar(self, width=20):
+    def _cw_tuning_bar(self, width=21):
         """Build a center-zero tuning indicator for CW mode."""
         center = width // 2
         bar = list("░" * width)
@@ -814,10 +893,11 @@ class DemodApp(App):
 
     def _rit_str(self):
         """Format RIT offset for display."""
+        step = f"Step:{self.rit_step:3d}Hz"
         if self.rit_offset == 0:
-            return "RIT:    0 Hz"
+            return f"RIT:    0 Hz  {step}"
         sign = "+" if self.rit_offset > 0 else "-"
-        return f"RIT: {sign}{abs(self.rit_offset):3d} Hz"
+        return f"RIT: {sign}{abs(self.rit_offset):3d} Hz  {step}"
 
     def _snr_str(self):
         """Format SNR measurement for display."""
@@ -997,6 +1077,13 @@ class DemodApp(App):
             freq = self._get_active_freq(vfo)
             if freq is not None:
                 self.call_from_thread(self._apply_cat_update, freq)
+                # Schedule lookup when frequency changes
+                if freq != self._sked_last_freq:
+                    self._sked_last_freq = freq
+                    name = _lookup_station(freq)
+                    if name:
+                        self.call_from_thread(
+                            setattr, self, "station_name", name)
             sm = self.sdr.get_s_meter()
             if sm is not None:
                 with self._s_lock:
@@ -1142,12 +1229,18 @@ class DemodApp(App):
         self.demod.clear_mfsk_text()
 
     def action_toggle_nb(self):
-        self.demod.nb_enabled = not self.demod.nb_enabled
+        """Cycle NB: Off → Low → Med → High → Off."""
+        if not self.demod.nb_enabled:
+            self.demod.nb_enabled = True
+            self.demod.set_nb_threshold("Low")
+        elif self.demod.nb_threshold_name == "High":
+            self.demod.nb_enabled = False
+        else:
+            self.demod.cycle_nb_threshold()
         self._update_audio_info()
 
     def action_cycle_nb_threshold(self):
-        self.demod.cycle_nb_threshold()
-        self._update_audio_info()
+        self.action_toggle_nb()
 
     def action_cycle_dnr(self):
         self.demod.cycle_dnr_level()
@@ -1313,16 +1406,23 @@ class DemodApp(App):
         self.tune_step = int(value)
 
     def action_rit_up(self):
-        """RIT tune up by 10 Hz (SSB/CW modes)."""
+        """RIT tune up (SSB/CW modes)."""
         if self.demod.mode in ("USB", "LSB", "CW+", "CW-"):
-            self._tune_offset(10)
-            self.rit_offset += 10
+            self._tune_offset(self.rit_step)
+            self.rit_offset += self.rit_step
 
     def action_rit_down(self):
-        """RIT tune down by 10 Hz (SSB/CW modes)."""
+        """RIT tune down (SSB/CW modes)."""
         if self.demod.mode in ("USB", "LSB", "CW+", "CW-"):
-            self._tune_offset(-10)
-            self.rit_offset -= 10
+            self._tune_offset(-self.rit_step)
+            self.rit_offset -= self.rit_step
+
+    def action_select_rit_step(self):
+        """Cycle RIT step: 1 → 10 → 100 → 1 Hz."""
+        steps = [1, 10, 100]
+        idx = steps.index(self.rit_step) if self.rit_step in steps else 0
+        self.rit_step = steps[(idx + 1) % len(steps)]
+        self._update_mode_info()
 
     def action_select_vfo(self):
         """Show VFO selector popup."""
@@ -1364,11 +1464,13 @@ class DemodApp(App):
         """Send tune command to radio in a worker thread."""
         ok = self.sdr.set_frequency(freq_hz, vfo=self.active_vfo)
         if ok:
-            self.call_from_thread(self._apply_tune, freq_hz)
+            self._sked_last_freq = freq_hz
+            name = _lookup_station(freq_hz)
+            self.call_from_thread(self._apply_tune, freq_hz, name)
 
-    def _apply_tune(self, freq_hz):
+    def _apply_tune(self, freq_hz, station=""):
         self.frequency_hz = freq_hz
-        self.station_name = ""
+        self.station_name = station
         self._update_radio_info()
         self._spectrum_update()
 

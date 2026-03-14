@@ -30,7 +30,7 @@ Real-time data pipeline: **IQ network stream -> DSP -> audio output**, with a Te
 
 ### Module Responsibilities
 
-- **`app.py`** — Textual `App` subclass (`DemodApp`). TUI layout, keybindings, periodic UI refresh (1s tick + 100ms display update), coordinates all components. Entry point is `main()`. Uses `SDRSource` abstraction for all IQ/control operations. Listens on `$XDG_RUNTIME_DIR/swldemod-station.fifo` for station names from external tools (e.g. SWLScheduleTool).
+- **`app.py`** — Textual `App` subclass (`DemodApp`). TUI layout, keybindings, periodic UI refresh (1s tick + 100ms display update), coordinates all components. Entry point is `main()`. Uses `SDRSource` abstraction for all IQ/control operations. Listens on `$XDG_RUNTIME_DIR/swldemod-station.fifo` for station names from external tools (e.g. SWLScheduleTool). Also auto-resolves station names from the SWLScheduleTool schedule CSV (`sked-current.csv`) when the tuned frequency changes.
 - **`sdr/`** — Pluggable SDR backend package:
   - **`base.py`** — `SDRSource` ABC (connect/disconnect/stream + optional radio control) and `SDRInfo` dataclass.
   - **`elad_fdmduo.py`** — Elad FDM-DUO backend wrapping `IQClient` + `CATClient`.

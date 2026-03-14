@@ -75,35 +75,41 @@ swl-demod --sdr elad-fdmduo --host 192.168.1.10
 
 ## Keyboard Controls
 
+All keybindings are configurable via the `[keys]` section in `config.conf`.
+
 | Key             | Action                              |
 |-----------------|-------------------------------------|
+| `q`             | Quit                                |
+| `Escape`        | Unfocus text input / close popup    |
+| `?`             | Show keyboard shortcuts help        |
 | `c`             | Connect to IQ and CAT servers       |
-| `d`             | Disconnect                          |
+| `x`             | Disconnect                          |
 | `r`             | Reconnect                           |
-| `m`             | Toggle mute                         |
+| `0`             | Toggle mute                         |
 | `a`             | Toggle AGC                          |
-| `x`             | Cycle mode (AM → SAM → ... → CW± → RTTY± → PSK31 → MFSK16 → DRM) |
-| `v`             | Toggle VFO (A ↔ B)                  |
-| `+` / `-`       | Volume up / down                    |
-| `]` / `[`       | Increase / decrease demod bandwidth |
-| `→` / `←`       | Tune up / down (1 kHz steps)        |
-| `Alt+→` / `Alt+←` | Fine tune (100 Hz steps)         |
-| `PgUp` / `PgDn` | RIT tune up / down (10 Hz steps, SSB/CW only) |
+| `+` / `-`       | AF gain up / down                   |
+| `m`             | Select demod mode (popup)           |
+| `b`             | Select bandwidth (popup)            |
+| `]` / `[`       | Bandwidth up / down                 |
+| `v`             | Select VFO (popup)                  |
+| `→` / `←`       | Tune up / down (by tune step)       |
+| `s`             | Select tune step (popup)            |
 | `/`             | Direct frequency entry (kHz, tunes active VFO) |
+| `↑` / `↓`       | RIT offset up / down (SSB/CW only) |
+| `f`             | Cycle RIT step (1 / 10 / 100 Hz)    |
 | `Shift+→`       | Zoom into spectrum                  |
 | `Shift+←`       | Zoom out of spectrum                |
-| `n`             | Toggle Noise Blanker on/off         |
-| `N` (Shift+N)   | Cycle NB threshold (Low / Med / High) |
-| `f`             | Cycle DNR level (Off / 1 / 2 / 3)  |
+| `d`             | Toggle spectrum display             |
+| `n`             | Cycle Noise Blanker (Off / Low / Med / High) |
+| `N` (Shift+N)   | Cycle DNR level (Off / 1 / 2 / 3)  |
+| `Alt+n`         | Toggle auto notch filter (DNF)      |
 | `p`             | Toggle CW Audio Peak Filter (APF)  |
-| `t`             | Clear decoded text (CW/RTTY/PSK31)  |
-| `q`             | Quit                                |
-| `Escape`        | Unfocus text input                  |
+| `t`             | Clear decoded text (CW/RTTY/PSK31/MFSK16) |
 
 ## Display Layout
 
 ```
-  SWL Demod Tool v0.5.1     12:34:56 UTC
+  SWL Demod Tool v0.5.4     12:34:56 UTC
   ╭─░▒▓  Freq ► ╰─⏺ [kHz]
     IQ ● Elad FDM-DUO  localhost:4533  192000 Hz 32-bit IQ
    CAT ● Elad FDM-DUO  localhost:4532
@@ -114,7 +120,7 @@ swl-demod --sdr elad-fdmduo --host 192.168.1.10
   AF Peak: [████░░░░░░░░░]  -42 dB           BUF: [████████░░░░░] 80% U:0       DNR: 2
   RF Peak: [██████░░░░░░░]  -85.3 dBFS         S: [████████░░░░░] S7            DNF: OFF
                                                                                  APF: OFF
-   Tune: [░░░░░░░░░░█░░░░░░░░░░] +  3.1 Hz    SNR: 18 dB    22 WPM    RIT:  +30 Hz
+   Tune: [░░░░░░░░░░█░░░░░░░░░░░] +  3.1 Hz    SNR: 18 dB    22 WPM    RIT: +30 Hz  Step: 10Hz
 ```
 
 ### Mode Info Panel
@@ -203,7 +209,7 @@ MFSK16 is commonly used on HF for keyboard-to-keyboard QSOs and is popular for i
 
 ### RIT (Receiver Incremental Tuning)
 
-In SSB and CW modes, `PgUp`/`PgDn` tune the receiver in 10 Hz steps. The cumulative RIT offset is shown in the mode info panel. RIT resets to zero when using coarse/fine tuning, direct frequency entry, or changing mode.
+In SSB and CW modes, `↑`/`↓` tune the receiver by the current RIT step. Press `f` to cycle the step size: 1 → 10 → 100 Hz. The cumulative RIT offset and current step are shown in the mode info panel. RIT resets to zero when using coarse tuning, direct frequency entry, or changing mode.
 
 ### Noise Reduction
 
@@ -241,7 +247,7 @@ Press `v` to toggle between VFO-A and VFO-B. The frequency display updates to sh
 ## Spectrum Display
 
 The spectrum shows a multi-row Unicode bar chart with a center marker (▲) indicating the tuned frequency. The info line below shows:
-- **Station name** (bold gold, left side) — displayed when SWLScheduleTool sends a station name via FIFO; clears on manual tune
+- **Station name** (bold gold, left side) — auto-resolved from SWLScheduleTool schedule or received via FIFO
 - **Span** (right side) — the visible frequency span
 
 ### Zoom
@@ -252,7 +258,9 @@ Use `Shift+Right` to zoom in and `Shift+Left` to zoom out. Zoom levels halve/dou
 
 ### Station Name Integration
 
-When [SWLScheduleTool](https://github.com/dielectric-coder/SWLScheduleTool) tunes the radio, it sends the station name to `$XDG_RUNTIME_DIR/swldemod-station.fifo`. SWL Demod Tool listens on this FIFO and displays the station name on the spectrum info line. The name clears automatically when you tune manually.
+Station names are resolved automatically from the [SWLScheduleTool](https://github.com/dielectric-coder/SWLScheduleTool) schedule database. When the tuned frequency changes, the app looks up `sked-current.csv` and displays the name of any station currently on-air at that frequency. The lookup checks the sibling `SWLScheduleTool` directory or `~/.local/share/eibi-swl/`.
+
+Additionally, when SWLScheduleTool tunes the radio directly, it sends the station name via `$XDG_RUNTIME_DIR/swldemod-station.fifo`, which takes priority over the automatic lookup.
 
 ## S-Meter
 

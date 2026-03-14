@@ -177,7 +177,7 @@ IQ (192 kHz) -> [Noise Blanker] (impulse detection + zeroing)
 
 **Audio Peak Filter (APF):** A biquad IIR bandpass filter (Q=15, ~50 Hz bandwidth) centered on the CW BFO frequency (700 Hz). Applied post-detection in CW modes when enabled. Helps isolate a single CW signal in a crowded band by suppressing adjacent signals.
 
-**RIT:** 10 Hz tuning steps via PgUp/PgDn in SSB/CW modes. Cumulative offset tracked and displayed; resets on coarse/fine tuning or mode change.
+**RIT:** Configurable tuning steps (1/10/100 Hz, cycle with `f`) via Up/Down arrows in SSB/CW modes. Cumulative offset and current step size tracked and displayed; resets on coarse tuning, direct frequency entry, or mode change.
 
 ### DRM Integration
 
