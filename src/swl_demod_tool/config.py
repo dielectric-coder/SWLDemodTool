@@ -25,6 +25,10 @@ DEFAULTS = {
         "nb_threshold": "Med",
         "dnr_level": "0",
     },
+    "state": {
+        "mode": "AM",
+        "bandwidth": "5000",
+    },
 }
 
 # Default keybindings: action -> human-readable key

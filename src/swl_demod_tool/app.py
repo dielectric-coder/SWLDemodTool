@@ -22,7 +22,7 @@ from textual import work
 from rich.text import Text
 
 from swl_demod_tool import __version__
-from swl_demod_tool.config import (load_config, load_keybindings,
+from swl_demod_tool.config import (load_config, save_config, load_keybindings,
                                     keybindings_to_textual, _to_display_key)
 from swl_demod_tool.sdr import create_sdr_source, DEFAULT_BACKEND
 from swl_demod_tool.dsp import compute_spectrum_db, spectrum_to_sparkline, Demodulator
@@ -373,8 +373,9 @@ class DemodApp(App):
     peak_db = reactive(-120.0)
     tune_step = reactive(1000)  # Fine tune step in Hz
 
-    def __init__(self, sdr_source, audio_device="default", keybindings=None):
+    def __init__(self, sdr_source, audio_device="default", keybindings=None, config=None):
         self._keybindings = keybindings or {}
+        self._config = config
         self._shortcut_table = _build_shortcut_table(self._keybindings)
         self._status_bar_text = _build_status_bar(self._keybindings)
         super().__init__()
@@ -383,8 +384,12 @@ class DemodApp(App):
         self._spectrum_buf = deque(maxlen=SPECTRUM_AVG)
         self._iq_lock = threading.Lock()
 
-        # Demodulation and audio
-        self.demod = Demodulator(iq_sample_rate=192000, audio_rate=48000, bandwidth=5000)
+        # Demodulation and audio — restore saved mode/bandwidth
+        saved_mode = config.get("state", "mode", fallback="AM") if config else "AM"
+        saved_bw = config.getint("state", "bandwidth", fallback=5000) if config else 5000
+        self.demod = Demodulator(iq_sample_rate=192000, audio_rate=48000, bandwidth=saved_bw)
+        self.demod.mode = saved_mode
+        self.demod.reset()
         self.audio = AudioOutput(sample_rate=48000, block_size=1024)
         self.drm = DRMDecoder(iq_sample_rate=192000, audio_rate=48000)
 
@@ -514,7 +519,8 @@ class DemodApp(App):
         w = self.query_one("#radio-info", Static)
         vfo = self.active_vfo
         mode = self.demod.mode
-        bw_str = f"BW: {self.demod.bandwidth} Hz"
+        bw = 10000 if mode == "DRM" else self.demod.bandwidth
+        bw_str = f"BW: {bw} Hz"
         if self.frequency_hz > 0:
             freq_mhz = self.frequency_hz / 1e6
             text = f"  VFO: {vfo}    Frequency: {freq_mhz:.6f} MHz    Mode: {mode}    {bw_str}"
@@ -1043,7 +1049,9 @@ class DemodApp(App):
                 os.mkfifo(SPECTRUM_FIFO)
 
         # Build command: swl-spectrum <host> <iq_port> [-f freq] [-m mode] [-b bw]
-        cmd = ["swl-spectrum", self.host, str(self.iq_port)]
+        host = getattr(self.sdr, 'host', 'localhost')
+        iq_port = getattr(self.sdr, 'iq_port', 4533)
+        cmd = ["swl-spectrum", host, str(iq_port)]
         if self.frequency_hz > 0:
             cmd += ["-f", str(self.frequency_hz)]
         mode = self.demod.mode
@@ -1214,6 +1222,13 @@ class DemodApp(App):
         self.push_screen(HelpScreen(self._shortcut_table, help_key))
 
     def on_unmount(self):
+        # Save mode and bandwidth to config
+        if self._config:
+            if not self._config.has_section("state"):
+                self._config.add_section("state")
+            self._config.set("state", "mode", self.demod.mode)
+            self._config.set("state", "bandwidth", str(self.demod.bandwidth))
+            save_config(self._config)
         self.audio.stop()
         self.drm.stop()
         self.sdr.disconnect()
@@ -1258,7 +1273,7 @@ def main():
     keybindings = load_keybindings(config)
 
     app = DemodApp(sdr_source=sdr_source, audio_device=audio_device,
-                   keybindings=keybindings)
+                   keybindings=keybindings, config=config)
     app.drm.dream_path = app.drm.dream_path or dream_path
     app.run()
 
