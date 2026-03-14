@@ -25,6 +25,12 @@ DEFAULTS = {
         "nb_threshold": "Med",
         "dnr_level": "0",
     },
+    "wefax": {
+        "ioc": "576",
+        "rpm": "120",
+        "auto_save": "true",
+        "save_dir": "~/Pictures/fax",
+    },
     "state": {
         "mode": "AM",
         "bandwidth": "5000",

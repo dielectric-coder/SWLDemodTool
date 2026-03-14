@@ -754,6 +754,9 @@ class Demodulator:
         self._mfsk_tone_idx = -1
         self._mfsk_tone_confidence = 0.0
 
+        # WEFAX raw audio buffer (USB demod output for external decoder)
+        self._wefax_raw = None
+
     def _update_cw_filter(self):
         """Rebuild the post-decimation audio-rate lowpass for CW modes."""
         self._cw_taps, self._cw_zi_i = _make_filter(255, self.bandwidth, self.audio_rate)
@@ -1103,6 +1106,8 @@ class Demodulator:
             detected = self._detect_psk31(i_dec, q_dec)
         elif self.mode == "MFSK16":
             detected = self._detect_mfsk16(i_dec, q_dec)
+        elif self.mode == "WEFAX":
+            detected = self._detect_wefax(i_dec, q_dec)
         elif self.mode in ("USB", "LSB"):
             detected = i_dec.astype(np.float32)
         elif self.mode in ("SAM", "SAM-U", "SAM-L"):
@@ -1877,6 +1882,20 @@ class Demodulator:
     def get_mfsk_tone(self):
         """Return (tone_index, confidence) for MFSK16 display."""
         return self._mfsk_tone_idx, self._mfsk_tone_confidence
+
+    # --- WEFAX support ---
+
+    def _detect_wefax(self, i_dec, q_dec):
+        """USB-style demod for WEFAX — return audio and stash raw for decoder."""
+        audio = i_dec.astype(np.float32)
+        self._wefax_raw = audio.copy()
+        return audio
+
+    def get_wefax_raw(self):
+        """Return and clear the WEFAX raw audio buffer."""
+        raw = self._wefax_raw
+        self._wefax_raw = None
+        return raw
 
     def get_cw_text(self):
         """Return the decoded CW text buffer."""

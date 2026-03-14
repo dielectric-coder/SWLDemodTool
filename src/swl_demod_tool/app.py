@@ -30,6 +30,7 @@ from swl_demod_tool.sdr import create_sdr_source, DEFAULT_BACKEND
 from swl_demod_tool.dsp import compute_spectrum_db, spectrum_to_sparkline, Demodulator
 from swl_demod_tool.audio import AudioOutput
 from swl_demod_tool.drm import DRMDecoder
+from swl_demod_tool.wefax import WEFAXDecoder
 
 SPECTRUM_AVG = 3
 SPECTRUM_FIFO = "/tmp/swl-spectrum.fifo"
@@ -556,6 +557,16 @@ class DemodApp(App):
         self.audio = AudioOutput(sample_rate=48000, block_size=1024)
         self.drm = DRMDecoder(iq_sample_rate=192000, audio_rate=48000)
 
+        # WEFAX decoder
+        wefax_ioc = config.getint("wefax", "ioc", fallback=576) if config else 576
+        wefax_rpm = config.getint("wefax", "rpm", fallback=120) if config else 120
+        wefax_auto = config.getboolean("wefax", "auto_save", fallback=True) if config else True
+        wefax_dir = config.get("wefax", "save_dir", fallback="~/Pictures/fax") if config else "~/Pictures/fax"
+        self.wefax = WEFAXDecoder(
+            sample_rate=48000, ioc=wefax_ioc, rpm=wefax_rpm,
+            save_dir=wefax_dir, auto_save=wefax_auto)
+        self._decode_viewer_proc = None
+
         # Audio level tracking
         self._audio_level_db = -120.0
         self._audio_level_lock = threading.Lock()
@@ -949,6 +960,15 @@ class DemodApp(App):
             if mfsk_text:
                 t.append(f"\n   {mfsk_text}")
             w.update(t)
+        elif mode == "WEFAX":
+            state = self.wefax.get_state()
+            lines = self.wefax.get_line_count()
+            ioc = self.wefax.get_ioc()
+            rpm = self.wefax.get_rpm()
+            w.update(f"   WEFAX  IOC:{ioc}  {rpm}RPM  [{state}]  Line: {lines}")
+            # Check for completed images
+            for path in self.wefax.get_completed_images():
+                self.notify(f"WEFAX saved: {os.path.basename(path)}")
         elif mode == "DRM":
             t = self._drm_status_text()
             if t is not None:
@@ -1045,11 +1065,46 @@ class DemodApp(App):
                 # Push to audio output
                 self.audio.write(audio)
 
+                # Feed WEFAX decoder
+                if self.demod.mode == "WEFAX":
+                    raw = self.demod.get_wefax_raw()
+                    if raw is not None:
+                        self.wefax.feed(raw)
+
         self.call_from_thread(self._apply_iq_update, peak)
 
     def _on_drm_audio(self, audio):
         """Called from DRM reader thread with decoded float32 audio."""
         self.audio.write(audio)
+
+    def _launch_decode_viewer(self):
+        """Spawn the GTK4 decode viewer subprocess for WEFAX."""
+        self._kill_decode_viewer()
+        try:
+            import sys
+            self._decode_viewer_proc = subprocess.Popen(
+                [sys.executable, "-m", "swl_demod_tool.decode_viewer",
+                 "--mode", "wefax", "--data-dir", self.wefax.get_temp_dir()],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            logging.getLogger(__name__).info(
+                "Launched decode viewer (PID %d)", self._decode_viewer_proc.pid)
+        except Exception as e:
+            logging.getLogger(__name__).warning(
+                "Failed to launch decode viewer: %s", e)
+            self._decode_viewer_proc = None
+
+    def _kill_decode_viewer(self):
+        """Kill the decode viewer subprocess if running."""
+        if self._decode_viewer_proc is not None:
+            try:
+                self._decode_viewer_proc.terminate()
+                self._decode_viewer_proc.wait(timeout=2)
+            except Exception:
+                try:
+                    self._decode_viewer_proc.kill()
+                except Exception:
+                    pass
+            self._decode_viewer_proc = None
 
     def _apply_iq_update(self, peak):
         self.peak_db = peak
@@ -1118,6 +1173,8 @@ class DemodApp(App):
                 self.audio.start(device=self.audio_device)
                 if self.demod.mode == "DRM":
                     self.drm.start(audio_callback=self._on_drm_audio)
+                if self.demod.mode == "WEFAX":
+                    self._launch_decode_viewer()
                 self.call_from_thread(self._update_conn_status)
                 # Start IQ streaming
                 self.sdr.start_streaming(self._on_iq_data)
@@ -1154,7 +1211,7 @@ class DemodApp(App):
         self._update_audio_info()
 
     _MODE_LIST = ["AM", "SAM", "SAM-U", "SAM-L", "USB", "LSB", "CW+", "CW-",
-                   "RTTY+", "RTTY-", "PSK31", "MFSK16", "DRM"]
+                   "RTTY+", "RTTY-", "PSK31", "MFSK16", "WEFAX", "DRM"]
     _MODE_HINTS = {
         "AM": "Amplitude modulation", "SAM": "Synchronous AM",
         "SAM-U": "Sync AM upper", "SAM-L": "Sync AM lower",
@@ -1162,12 +1219,14 @@ class DemodApp(App):
         "CW+": "CW upper beat", "CW-": "CW lower beat",
         "RTTY+": "RTTY normal", "RTTY-": "RTTY inverted",
         "PSK31": "31.25 baud BPSK", "MFSK16": "16-tone FSK + FEC",
+        "WEFAX": "Weather Fax",
         "DRM": "Digital Radio Mondiale",
     }
     _BW_PRESETS = [100, 250, 500, 1200, 2400, 3200, 5000, 10000]
     _MODE_DEFAULT_BW = {"AM": 5000, "SAM": 5000, "SAM-U": 5000, "SAM-L": 5000,
                         "USB": 2400, "LSB": 2400, "CW+": 500, "CW-": 500,
-                        "RTTY+": 2400, "RTTY-": 2400, "PSK31": 500, "MFSK16": 500}
+                        "RTTY+": 2400, "RTTY-": 2400, "PSK31": 500, "MFSK16": 500,
+                        "WEFAX": 2800}
 
     def action_select_mode(self):
         """Show mode selector popup."""
@@ -1184,6 +1243,15 @@ class DemodApp(App):
         old_mode = self.demod.mode
         if new_mode == old_mode:
             return
+
+        # Transition away from WEFAX: reset decoder, kill viewer
+        if old_mode == "WEFAX" and new_mode != "WEFAX":
+            self.wefax.reset()
+            self._kill_decode_viewer()
+
+        # Transition to WEFAX: launch viewer
+        if new_mode == "WEFAX" and old_mode != "WEFAX":
+            self._launch_decode_viewer()
 
         # Transition away from DRM: stop Dream
         if old_mode == "DRM" and new_mode != "DRM":
@@ -1516,6 +1584,8 @@ class DemodApp(App):
             save_config(self._config)
         self.audio.stop()
         self.drm.stop()
+        self._kill_decode_viewer()
+        self.wefax.cleanup()
         self.sdr.disconnect()
         # Clean up spectrum display
         if self._spectrum_fifo_fd >= 0:
