@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.2] - 2026-03-14
+
+### Added
+- **Popup selector screens**: New `SelectorScreen` modal for mode (`x`), bandwidth (`b`), VFO (`v`), and tune step (`g`) selection. Uses `OptionList` with keyboard navigation (up/down/Enter/Esc), current-item marker, and solid-border styling.
+- **Configurable tune step**: Selectable from 1 Hz to 10 kHz via popup. Left/right arrow keys tune by the selected step. Replaces the fixed 100 Hz fine-tune (Alt+arrow removed).
+- **Tune step display**: Current step shown in the radio info line alongside VFO, frequency, mode, and bandwidth.
+
+### Changed
+- **Frequency input relocated**: Moved from separate bar above connection status to the right side of the radio info line, with the original powerline-styled label preserved.
+- Mode selection changed from cycle (`x` cycled through modes) to popup selector.
+- VFO selection changed from toggle to popup selector.
+
 ## [0.5.1] - 2026-03-14
 
 ### Changed

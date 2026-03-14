@@ -16,7 +16,8 @@ from datetime import datetime, timezone
 from textual.app import App
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Footer, Input, Static
+from textual.widgets import Footer, Input, Static, OptionList
+from textual.widgets.option_list import Option
 from textual.reactive import reactive
 from textual import work
 from rich.text import Text
@@ -63,38 +64,35 @@ Screen {
     color: #769ff0;
     padding: 0 2;
     border-bottom: solid #394260;
+    layout: horizontal;
 }
 
-#freq-bar-wrap {
+#radio-text {
+    width: 1fr;
     height: 1;
     background: black;
-    align-horizontal: center;
+    color: #769ff0;
 }
 
-#freq-bar {
-    width: 32;
-    height: 1;
-    background: black;
-}
-
-.freq-label {
+#freq-label {
     width: auto;
     height: 1;
+    background: black;
 }
 
-#freq-bar Input {
-    width: 1fr;
+#freq-input {
+    width: 14;
     height: 1;
     background: black;
     color: #769ff0;
     border: none;
 }
 
-#freq-bar Input:focus {
+#freq-input:focus {
     border: none;
 }
 
-#freq-bar Input.-placeholder {
+#freq-input.-placeholder {
     color: #a3aed2 50%;
 }
 
@@ -182,6 +180,7 @@ KEYBINDING_META = {
     "toggle_agc":        ("Toggle AGC",                  "Audio & Mode",    "AGC"),
     "volume_up":         ("AF gain up",                  "Audio & Mode",    None),
     "volume_down":       ("AF gain down",                "Audio & Mode",    None),
+    "select_bw":         ("Select bandwidth",            "Audio & Mode",    "BW"),
     "bw_up":             ("Bandwidth up",                "Audio & Mode",    None),
     "bw_down":           ("Bandwidth down",              "Audio & Mode",    None),
     "zoom_in":           ("Zoom in",                     "Display",         None),
@@ -189,12 +188,11 @@ KEYBINDING_META = {
     "tune_up":           ("Tune up",                     "Tuning",          None),
     "tune_down":         ("Tune down",                   "Tuning",          None),
     "focus_freq":        ("Direct frequency entry (kHz)","Tuning",          "Freq"),
-    "cycle_mode":        ("Cycle demod mode",            "Audio & Mode",    "Mode"),
-    "fine_tune_up":      ("Fine tune up",                "Tuning",          None),
-    "fine_tune_down":    ("Fine tune down",              "Tuning",          None),
+    "select_mode":       ("Select demod mode",           "Audio & Mode",    "Mode"),
+    "select_tune_step":  ("Select tune step",            "Tuning",          "Step"),
     "rit_up":            ("RIT offset up",               "Tuning",          None),
     "rit_down":          ("RIT offset down",             "Tuning",          None),
-    "toggle_vfo":        ("Toggle VFO A/B",              "Tuning",          "VFO"),
+    "select_vfo":        ("Select VFO",                  "Tuning",          "VFO"),
     "clear_cw_text":     ("Clear CW decoded text",       "CW",              None),
     "toggle_nb":         ("Toggle noise blanker",        "Noise Reduction", "NB"),
     "cycle_nb_threshold":("Cycle NB threshold",          "Noise Reduction", "NB Thr"),
@@ -207,7 +205,6 @@ KEYBINDING_META = {
 # Pairs of (down_action, up_action) shown as a single "key1 / key2" help entry
 _PAIRED_ACTIONS = [
     ("tune_down", "tune_up"),
-    ("fine_tune_down", "fine_tune_up"),
     ("volume_down", "volume_up"),
     ("bw_down", "bw_up"),
     ("zoom_out", "zoom_in"),
@@ -303,6 +300,98 @@ class HelpScreen(ModalScreen):
                 yield Static(hint, id="help-hint")
 
 
+SELECTOR_CSS = """
+#selector-container {
+    align: center middle;
+    width: 100%;
+    height: 100%;
+    background: black 50%;
+}
+
+#selector-card {
+    width: 40;
+    height: auto;
+    max-height: 80%;
+    border: solid #a3aed2;
+    background: #1a1a2e;
+    color: #a9b1d6;
+    padding: 0;
+}
+
+#selector-title {
+    text-style: bold;
+    text-align: center;
+    width: 100%;
+    padding: 1 0;
+    color: #a3aed2;
+    border-bottom: solid #a3aed2;
+}
+
+#selector-list {
+    width: 100%;
+    height: auto;
+    max-height: 20;
+    background: #1a1a2e;
+    color: #a9b1d6;
+    border: none;
+    padding: 0 1;
+}
+
+#selector-list > .option-list--option-highlighted {
+    background: #2a2a4a;
+    color: #ffffff;
+}
+
+#selector-hint {
+    text-align: center;
+    width: 100%;
+    padding: 0 0;
+    color: $text-muted;
+    border-top: solid #a3aed2;
+}
+"""
+
+
+class SelectorScreen(ModalScreen):
+    """Generic popup selector with OptionList."""
+
+    CSS = SELECTOR_CSS
+    BINDINGS = [
+        ("escape", "dismiss", "Close"),
+    ]
+
+    def __init__(self, title, items, current=None):
+        """items: list of (value, label) tuples. current: currently selected value."""
+        super().__init__()
+        self._title = title
+        self._items = items
+        self._current = current
+
+    def compose(self):
+        options = []
+        self._highlight_idx = 0
+        for i, (value, label) in enumerate(self._items):
+            marker = "\u25b6 " if value == self._current else "  "
+            options.append(Option(f"{marker}{label}", id=value))
+            if value == self._current:
+                self._highlight_idx = i
+
+        with Container(id="selector-container"):
+            with Container(id="selector-card"):
+                yield Static(self._title, id="selector-title")
+                yield OptionList(*options, id="selector-list")
+
+                yield Static("\u2191\u2193: navigate \u00b7 Enter: select \u00b7 Esc: cancel", id="selector-hint")
+
+    def on_mount(self):
+        ol = self.query_one("#selector-list", OptionList)
+        ol.highlighted = self._highlight_idx
+        ol.focus()
+
+    def on_option_list_option_selected(self, event):
+        self.dismiss(event.option.id)
+
+
 # S-meter thresholds (dB values corresponding to S-units, approximate)
 S_METER_BLOCKS = "▏▎▍▌▋▊▉█"
 
@@ -327,11 +416,6 @@ class DemodApp(App):
     CSS = CSS
     AUTO_FOCUS = None
     theme = "tokyo-night"
-    FREQ_LABEL = (
-        "[#a3aed2]░▒▓[/]"
-        "[#090c0c on #a3aed2] Freq. [/]"
-        "[#a3aed2 on black]\ue0b0 [/]"
-    )
     BINDINGS = [
         ("q", "quit", "Quit"),
         ("escape", "unfocus", "Unfocus"),
@@ -350,12 +434,12 @@ class DemodApp(App):
         ("right", "tune_up", "Tune+"),
         ("left", "tune_down", "Tune\u2212"),
         ("slash", "focus_freq", "Freq"),
-        ("x", "cycle_mode", "Mode"),
-        ("alt+right", "fine_tune_up", "Fine+"),
-        ("alt+left", "fine_tune_down", "Fine\u2212"),
+        ("x", "select_mode", "Mode"),
+        ("b", "select_bw", "BW"),
+        ("g", "select_tune_step", "Step"),
         ("pageup", "rit_up", "RIT+"),
         ("pagedown", "rit_down", "RIT\u2212"),
-        ("v", "toggle_vfo", "VFO"),
+        ("v", "select_vfo", "VFO"),
         ("t", "clear_cw_text", "ClrTxt"),
         ("p", "toggle_apf", "APF"),
         ("n", "toggle_nb", "NB"),
@@ -420,12 +504,16 @@ class DemodApp(App):
 
     def compose(self):
         yield Static(id="title-bar")
-        with Container(id="freq-bar-wrap"):
-            with Horizontal(id="freq-bar"):
-                yield Static(self.FREQ_LABEL, classes="freq-label")
-                yield Input(placeholder="kHz", id="freq-input")
         yield Static(id="conn-status")
-        yield Static(id="radio-info")
+        with Horizontal(id="radio-info"):
+            yield Static(id="radio-text")
+            yield Static(
+                "[#a3aed2]░▒▓[/]"
+                "[#090c0c on #a3aed2] Freq. [/]"
+                "[#a3aed2 on black]\ue0b0 [/]",
+                id="freq-label",
+            )
+            yield Input(placeholder="kHz", id="freq-input")
         yield Static(id="spectrum-display")
         yield Static(id="audio-info")
         yield Static(id="mode-info")
@@ -516,16 +604,17 @@ class DemodApp(App):
         w.update(Text.from_markup(text))
 
     def _update_radio_info(self):
-        w = self.query_one("#radio-info", Static)
+        w = self.query_one("#radio-text", Static)
         vfo = self.active_vfo
         mode = self.demod.mode
         bw = 10000 if mode == "DRM" else self.demod.bandwidth
         bw_str = f"BW: {bw} Hz"
+        step_str = f"Step: {self.tune_step} Hz"
         if self.frequency_hz > 0:
             freq_mhz = self.frequency_hz / 1e6
-            text = f"  VFO: {vfo}    Frequency: {freq_mhz:.6f} MHz    Mode: {mode}    {bw_str}"
+            text = f"  VFO: {vfo}    Frequency: {freq_mhz:.6f} MHz    Mode: {mode}    {bw_str}    {step_str}"
         else:
-            text = f"  VFO: {vfo}    Frequency: ---    Mode: {mode}    {bw_str}"
+            text = f"  VFO: {vfo}    Frequency: ---    Mode: {mode}    {bw_str}    {step_str}"
         w.update(Text.from_markup(text))
 
     def _update_spectrum(self):
@@ -938,12 +1027,37 @@ class DemodApp(App):
         self.demod.agc_enabled = not self.demod.agc_enabled
         self._update_audio_info()
 
-    def action_cycle_mode(self):
-        """Cycle demodulation mode: AM → SAM → SAM-U → SAM-L → USB → LSB → CW+ → CW- → RTTY+ → RTTY- → PSK31 → MFSK16 → DRM → AM."""
-        modes = ["AM", "SAM", "SAM-U", "SAM-L", "USB", "LSB", "CW+", "CW-", "RTTY+", "RTTY-", "PSK31", "MFSK16", "DRM"]
+    _MODE_LIST = ["AM", "SAM", "SAM-U", "SAM-L", "USB", "LSB", "CW+", "CW-",
+                   "RTTY+", "RTTY-", "PSK31", "MFSK16", "DRM"]
+    _MODE_HINTS = {
+        "AM": "Amplitude modulation", "SAM": "Synchronous AM",
+        "SAM-U": "Sync AM upper", "SAM-L": "Sync AM lower",
+        "USB": "Upper sideband", "LSB": "Lower sideband",
+        "CW+": "CW upper beat", "CW-": "CW lower beat",
+        "RTTY+": "RTTY normal", "RTTY-": "RTTY inverted",
+        "PSK31": "31.25 baud BPSK", "MFSK16": "16-tone FSK + FEC",
+        "DRM": "Digital Radio Mondiale",
+    }
+    _BW_PRESETS = [100, 250, 500, 1200, 2400, 3200, 5000, 10000]
+    _MODE_DEFAULT_BW = {"AM": 5000, "SAM": 5000, "SAM-U": 5000, "SAM-L": 5000,
+                        "USB": 2400, "LSB": 2400, "CW+": 500, "CW-": 500,
+                        "RTTY+": 2400, "RTTY-": 2400, "PSK31": 500, "MFSK16": 500}
+
+    def action_select_mode(self):
+        """Show mode selector popup."""
+        items = [(m, f"{m:8s} {self._MODE_HINTS.get(m, '')}") for m in self._MODE_LIST]
+        self.push_screen(
+            SelectorScreen("Select Mode", items, current=self.demod.mode),
+            callback=self._on_mode_selected,
+        )
+
+    def _on_mode_selected(self, value):
+        if value is None:
+            return
+        new_mode = value
         old_mode = self.demod.mode
-        idx = modes.index(old_mode) if old_mode in modes else 0
-        new_mode = modes[(idx + 1) % len(modes)]
+        if new_mode == old_mode:
+            return
 
         # Transition away from DRM: stop Dream
         if old_mode == "DRM" and new_mode != "DRM":
@@ -958,10 +1072,24 @@ class DemodApp(App):
         self.demod.mode = new_mode
         self.demod.reset()
         self.rit_offset = 0
-        # Set default bandwidth for the new mode
-        defaults = {"AM": 5000, "SAM": 5000, "SAM-U": 5000, "SAM-L": 5000, "USB": 2400, "LSB": 2400, "CW+": 500, "CW-": 500, "RTTY+": 2400, "RTTY-": 2400, "PSK31": 500, "MFSK16": 500}
-        if new_mode in defaults:
-            self.demod.set_bandwidth(defaults[new_mode])
+        if new_mode in self._MODE_DEFAULT_BW:
+            self.demod.set_bandwidth(self._MODE_DEFAULT_BW[new_mode])
+        self._update_radio_info()
+        self._spectrum_update()
+
+    def action_select_bw(self):
+        """Show bandwidth selector popup."""
+        items = [(str(bw), f"{bw:>5d} Hz") for bw in self._BW_PRESETS]
+        current_bw = str(self.demod.bandwidth)
+        self.push_screen(
+            SelectorScreen("Select Bandwidth", items, current=current_bw),
+            callback=self._on_bw_selected,
+        )
+
+    def _on_bw_selected(self, value):
+        if value is None:
+            return
+        self.demod.set_bandwidth(int(value))
         self._update_radio_info()
         self._spectrum_update()
 
@@ -1128,15 +1256,20 @@ class DemodApp(App):
         self._tune_offset(-self.tune_step)
         self.rit_offset = 0
 
-    def action_fine_tune_up(self):
-        """Fine tune up by 100 Hz."""
-        self._tune_offset(100)
-        self.rit_offset = 0
+    _TUNE_STEPS = [1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
 
-    def action_fine_tune_down(self):
-        """Fine tune down by 100 Hz."""
-        self._tune_offset(-100)
-        self.rit_offset = 0
+    def action_select_tune_step(self):
+        """Show tune step selector popup."""
+        items = [(str(s), f"{s:>5d} Hz") for s in self._TUNE_STEPS]
+        self.push_screen(
+            SelectorScreen("Select Tune Step", items, current=str(self.tune_step)),
+            callback=self._on_tune_step_selected,
+        )
+
+    def _on_tune_step_selected(self, value):
+        if value is None:
+            return
+        self.tune_step = int(value)
 
     def action_rit_up(self):
         """RIT tune up by 10 Hz (SSB/CW modes)."""
@@ -1150,12 +1283,20 @@ class DemodApp(App):
             self._tune_offset(-10)
             self.rit_offset -= 10
 
-    def action_toggle_vfo(self):
-        """Switch between VFO-A and VFO-B."""
+    def action_select_vfo(self):
+        """Show VFO selector popup."""
         if not self.sdr.has_control:
             return
-        new_vfo = "B" if self.active_vfo == "A" else "A"
-        self._do_set_vfo(new_vfo)
+        items = [("A", "VFO-A"), ("B", "VFO-B")]
+        self.push_screen(
+            SelectorScreen("Select VFO", items, current=self.active_vfo),
+            callback=self._on_vfo_selected,
+        )
+
+    def _on_vfo_selected(self, value):
+        if value is None or value == self.active_vfo:
+            return
+        self._do_set_vfo(value)
 
     @work(thread=True)
     def _do_set_vfo(self, vfo):
