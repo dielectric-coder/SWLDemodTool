@@ -202,7 +202,6 @@ HELP_CSS = """
 
 #help-card {
     width: 64;
-    height: auto;
     max-height: 90%;
     border: round #769ff0;
     background: black;
@@ -220,8 +219,7 @@ HELP_CSS = """
 
 #help-scroll {
     width: 100%;
-    height: auto;
-    max-height: 100%;
+    height: 1fr;
     overflow-y: auto;
 }
 
@@ -266,8 +264,8 @@ KEYBINDING_META = {
     "select_vfo":        ("Select VFO",                  "Tuning",          "VFO"),
     "clear_cw_text":     ("Clear decoded text",           "Audio & Mode",    None),
     "toggle_nb":         ("Cycle NB Off/Low/Med/High",   "Noise Reduction", "NB"),
-    "cycle_dnr":         ("Cycle spectral DNR level",    "Noise Reduction", "DNR"),
-    "toggle_auto_notch": ("Toggle auto notch filter",    "Noise Reduction", "DNF"),
+    "cycle_dnr":         ("Cycle DNR level (Off/1/2/3)", "Noise Reduction", "DNR"),
+    "toggle_auto_notch": ("Toggle DNF (auto notch)",     "Noise Reduction", "DNF"),
     "toggle_apf":        ("Toggle CW audio peak filter", "Noise Reduction", "APF"),
     "toggle_spectrum":   ("Toggle spectrum display",     "Display",         "Spec"),
 }
