@@ -103,17 +103,17 @@ swl-demod --sdr elad-fdmduo --host 192.168.1.10
 ## Display Layout
 
 ```
-  SWL Demod Tool v0.5.0     12:34:56 UTC
+  SWL Demod Tool v0.5.1     12:34:56 UTC
   ╭─░▒▓  Freq ► ╰─⏺ [kHz]
     IQ ● Elad FDM-DUO  localhost:4533  192000 Hz 32-bit IQ
-   CTL ●
+   CAT ● Elad FDM-DUO  localhost:4532
  Audio ● 48000 Hz
   VFO: A    Frequency: 7.100000 MHz    Mode: CW+    BW: 500 Hz
   ▁▁▂▂▃▅▇█▇▅▃▂▂▁▁▁   (9-row spectrum graph)
-    Vol: [████████████░░░░░░░░]  60%        AGC:  ON  (+40 dB)
-  Audio: [████░░░░░░░░░░░░░░░░]  -42 dB    Buf: [██████████░░░░░░░░░░] 50%
-   Peak: [██████░░░░░░░░░░░░░░]  -85.3 dBFS  S: [████████░░░░░░░░░░░░] S7
-     NB: ON (Med)    DNR: 2
+  AF Gain: [████████░░░░░]  -4.4 dB          AGC: [██████████░░░] +40 dB        NB: ON (Med)
+  AF Peak: [████░░░░░░░░░]  -42 dB           BUF: [████████░░░░░] 80% U:0       DNR: 2
+  RF Peak: [██████░░░░░░░]  -85.3 dBFS         S: [████████░░░░░] S7            DNF: OFF
+                                                                                 APF: OFF
    Tune: [░░░░░░░░░░█░░░░░░░░░░] +  3.1 Hz    SNR: 18 dB    22 WPM    RIT:  +30 Hz
 ```
 
@@ -143,10 +143,10 @@ A dedicated panel below the audio info displays mode-specific indicators:
 ### Panels
 
 - **Title bar** - App name and UTC clock
-- **Connection status** - IQ stream, CAT control, and audio output status with sample rate info
+- **Connection status** - IQ stream, CAT control (with backend name and host:port), and audio output status with sample rate info
 - **Radio info** - Active VFO, tuned frequency, operating mode, bandwidth
 - **Spectrum** - Multi-row bar graph of the received spectrum with center frequency marker and zoom span
-- **Audio info** - Volume, audio level, peak signal, S-meter, AGC status, buffer fill, noise reduction status
+- **Audio info** - AF Gain (dB), AF Peak (audio level), RF Peak (IQ spectrum peak dBFS), S-meter, AGC gain bar, buffer fill, noise reduction status (NB, DNR, DNF, APF)
 - **Mode info** - Mode-specific indicators (CW tuning/SNR/WPM, DRM status, SAM offset, SNR, RIT)
 
 ## Demodulation Modes

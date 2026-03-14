@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1] - 2026-03-14
+
+### Changed
+- **Redesigned audio info panel**: Fixed-width three-column layout with aligned labels and uniform 13-character bars. Renamed labels: "Vol" → "AF Gain" (now in dB), "Audio" → "AF Peak", "Peak" → "RF Peak", "Buf" → "BUF", "Underruns" → "U:". AGC now shown as a bar meter (displays "OFF" in bar when disabled). DNF and APF moved to separate rows. All label colons vertically aligned within each column.
+- **CAT connection status**: Renamed "CTL" to "CAT". Now shows backend name and host:port when connected (e.g., `CAT ● Elad FDM-DUO localhost:4532`).
+- **IQ connection status**: Now includes host:port in addition to sample rate and bit depth.
+
 ## [0.5.0] - 2026-03-14
 
 ### Added

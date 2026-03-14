@@ -492,15 +492,20 @@ class DemodApp(App):
         ctl_icon = "[green]●[/]" if self.sdr.has_control else "[#888888]○[/]"
         audio_icon = "[green]●[/]" if self.audio.is_running else "[#888888]○[/]"
 
-        rate_str = ""
         sdr_label = ""
+        iq_detail = ""
+        cat_detail = ""
         if self.sdr.info:
-            rate_str = f"  {self.sdr.info.sample_rate} Hz  {self.sdr.info.sample_bits}-bit IQ"
             sdr_label = self.sdr.info.label
+            host = getattr(self.sdr, 'host', '')
+            iq_detail = f"  {host}:{getattr(self.sdr, 'iq_port', '')}  {self.sdr.info.sample_rate} Hz  {self.sdr.info.sample_bits}-bit IQ"
+        if self.sdr.has_control:
+            host = getattr(self.sdr, 'host', '')
+            cat_detail = f" {sdr_label}  {host}:{getattr(self.sdr, 'cat_port', '')}"
 
         text = (
-            f"    IQ {iq_icon} {sdr_label}{rate_str}\n"
-            f"   CTL {ctl_icon}\n"
+            f"    IQ {iq_icon} {sdr_label}{iq_detail}\n"
+            f"   CAT {ctl_icon}{cat_detail}\n"
             f" Audio {audio_icon} {self.audio.sample_rate} Hz"
         )
         w.update(Text.from_markup(text))
@@ -610,50 +615,64 @@ class DemodApp(App):
         w = self.query_one("#audio-info", Static)
 
         # Volume display
-        vol_pct = int(self.demod.volume * 100)
+        vol_db = 20.0 * np.log10(max(self.demod.volume, 1e-10))
         mute_str = " [MUTE]" if self.demod.muted else ""
-        vol_bar = "█" * (vol_pct // 5) + "░" * (20 - vol_pct // 5)
+        vol_pct = int(self.demod.volume * 100)
+        vol_filled = int(vol_pct * 13 / 100)
+        vol_bar = "█" * vol_filled + "░" * (13 - vol_filled)
 
         # AGC info
-        agc_str = "ON " if self.demod.agc_enabled else "OFF"
         agc_gain_db = self.demod.get_agc_gain_db()
+        if self.demod.agc_enabled:
+            agc_bar = s_meter_bar(agc_gain_db, width=13, min_db=-60.0, max_db=100.0)
+            agc_str = f"AGC: [{agc_bar}] {agc_gain_db:+.0f} dB"
+        else:
+            agc_str = f"AGC: [{'OFF':░<13s}] {agc_gain_db:+.0f} dB"
 
         # Audio level meter
         with self._audio_level_lock:
             level_db = self._audio_level_db
-        level_bar = s_meter_bar(level_db, width=20, min_db=-80.0, max_db=0.0)
+        level_bar = s_meter_bar(level_db, width=13, min_db=-80.0, max_db=0.0)
 
         # Buffer fill
         fill_pct = int(self.audio.buffer_fill * 100)
-        buf_bar = "█" * (fill_pct // 5) + "░" * (20 - fill_pct // 5)
+        buf_filled = int(fill_pct * 13 / 100)
+        buf_bar = "█" * buf_filled + "░" * (13 - buf_filled)
         underruns = self.audio.underruns
 
-        peak_bar = s_meter_bar(self.peak_db, width=20, min_db=-120.0, max_db=-20.0)
+        peak_bar = s_meter_bar(self.peak_db, width=13, min_db=-120.0, max_db=-20.0)
         with self._s_lock:
             s_unit = self._s_unit
             s_raw = self._s_raw
         # SM raw value 0-22 maps to S0-S9+60
         s_frac = max(0.0, min(1.0, s_raw / 22.0))
-        s_filled = int(s_frac * 20)
-        s_bar = "█" * s_filled + "░" * (20 - s_filled)
+        s_filled = int(s_frac * 13)
+        s_bar = "█" * s_filled + "░" * (13 - s_filled)
 
         # Noise reduction status
-        nb_str = f" NB: {'ON':3s} ({self.demod.nb_threshold_name})" if self.demod.nb_enabled else " NB: OFF      "
+        nb_str = f" NB: ON ({self.demod.nb_threshold_name})" if self.demod.nb_enabled else " NB: OFF"
         dnr_lvl = self.demod.dnr_level
         dnr_str = f"DNR: {dnr_lvl}" if dnr_lvl > 0 else "DNR: OFF"
         an_str = "DNF: ON" if self.demod.auto_notch else "DNF: OFF"
         apf_str = "APF: ON" if self.demod.apf_enabled else "APF: OFF"
+        buf_str = f"BUF: [{buf_bar}] {fill_pct:2d}% U:{underruns}"
+        s_str = f"  S: [{s_bar}] {s_unit}"
+
+        CW = 45  # fixed column width
 
         text = (
-            f"{'    Vol: [' + vol_bar + '] ' + str(vol_pct) + '%' + mute_str:<44s}"
-            f"{nb_str:<20s}"
-            f"AGC: {agc_str} ({agc_gain_db:+.0f} dB)\n"
-            f"{'  Audio: [' + level_bar + '] ' + f'{level_db:.0f} dB':<44s}"
-            f"{dnr_str:<20s}"
-            f"Buf: [{buf_bar}] {fill_pct:2d}%  Underruns: {underruns}\n"
-            f"{'   Peak: [' + peak_bar + '] ' + f'{self.peak_db:.1f} dBFS':<44s}"
-            f"{an_str:<10s}{apf_str:<10s}"
-            f"  S: [{s_bar}] {s_unit}"
+            f"{'AF Gain: [' + vol_bar + '] ' + f'{vol_db:.1f} dB' + mute_str:<{CW}s}"
+            f"{agc_str:<{CW}s}"
+            f"{nb_str}\n"
+            f"{'AF Peak: [' + level_bar + '] ' + f'{level_db:.0f} dB':<{CW}s}"
+            f"{buf_str:<{CW}s}"
+            f"{dnr_str}\n"
+            f"{'RF Peak: [' + peak_bar + '] ' + f'{self.peak_db:.1f} dBFS':<{CW}s}"
+            f"{s_str:<{CW}s}"
+            f"{an_str}\n"
+            f"{'':>{CW}s}"
+            f"{'':>{CW}s}"
+            f"{apf_str}"
         )
         w.update(text)
 
