@@ -264,11 +264,11 @@ KEYBINDING_META = {
     "rit_down":          ("RIT offset down",             "Tuning",          None),
     "select_rit_step":   ("Cycle RIT step 1/10/100 Hz",  "Tuning",          "RIT"),
     "select_vfo":        ("Select VFO",                  "Tuning",          "VFO"),
-    "clear_cw_text":     ("Clear CW decoded text",       "CW",              None),
+    "clear_cw_text":     ("Clear decoded text",           "Audio & Mode",    None),
     "toggle_nb":         ("Cycle NB Off/Low/Med/High",   "Noise Reduction", "NB"),
     "cycle_dnr":         ("Cycle spectral DNR level",    "Noise Reduction", "DNR"),
     "toggle_auto_notch": ("Toggle auto notch filter",    "Noise Reduction", "DNF"),
-    "toggle_apf":        ("Toggle CW audio peak filter", "CW",              "APF"),
+    "toggle_apf":        ("Toggle CW audio peak filter", "Noise Reduction", "APF"),
     "toggle_spectrum":   ("Toggle spectrum display",     "Display",         "Spec"),
 }
 
@@ -284,7 +284,7 @@ _PAIRED_ACTIONS = [
 # Section display order
 _SECTION_ORDER = [
     "General", "Connection", "Tuning", "Audio & Mode", "Display",
-    "Noise Reduction", "CW",
+    "Noise Reduction",
 ]
 
 
