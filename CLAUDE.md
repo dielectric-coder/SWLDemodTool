@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-SWL Demod Tool — Terminal UI SDR demodulator with pluggable backends, built with Python and Textual. Supports multiple SDR hardware via a backend abstraction (`sdr/` package). Demodulates AM/SSB/CW/RTTY/PSK31/MFSK16/DRM audio and displays a live spectrum. Default backend: Elad FDM-DUO via TCP IQ + CAT server.
+SWL Demod Tool — Terminal UI SDR demodulator with pluggable backends, built with Python and Textual. Supports multiple SDR hardware via a backend abstraction (`sdr/` package). Demodulates AM/SSB/CW/RTTY/PSK31/MFSK16/WEFAX/DRM audio and displays a live spectrum. Default backend: Elad FDM-DUO via TCP IQ + CAT server.
 
 A native C/GTK4 GUI port is available separately as [HFDemodGTK](https://github.com/dielectric-coder/HFDemodGTK).
 
@@ -37,9 +37,11 @@ Real-time data pipeline: **IQ network stream -> DSP -> audio output**, with a Te
   - **`registry.py`** — Backend map and `create_sdr_source()` factory with lazy imports.
 - **`iq_client.py`** — TCP client for the Elad Spectrum IQ server (used internally by the Elad backend). Reads a 16-byte `ELAD` magic header (sample rate, bit depth), then streams 12288-byte chunks of 32-bit signed int IQ pairs, converting to normalized `complex64`. Daemon thread with callback delivery.
 - **`cat_client.py`** — TCP client for CAT control (used internally by the Elad backend). Kenwood-style commands (`;`-terminated). Polls VFO (`FR;`), frequency (`FA;`/`FB;`), and S-meter (`SM0;`). Supports VFO-A/B switching and tuning.
-- **`dsp.py`** — FFT spectrum (Blackman window, 4096-point), multi-row Unicode bar chart with peak-hold downsampling, and `Demodulator` class (FIR lowpass -> decimate -> AM/SSB/CW/RTTY/PSK31/MFSK16 detection -> DC removal -> AGC). CW modes include two-stage filtering, BFO tone mixing, tone detection with SNR measurement, and keying speed estimation. RTTY uses dual bandpass mark/space filters with Baudot decoder. PSK31 uses NCO downconversion with differential phase detection and Varicode decoder. MFSK16 uses FFT tone detection with soft-decision Viterbi FEC and IZ8BLY MFSK Varicode.
+- **`dsp.py`** — FFT spectrum (Blackman window, 4096-point), multi-row Unicode bar chart with peak-hold downsampling, and `Demodulator` class (FIR lowpass -> decimate -> AM/SSB/CW/RTTY/PSK31/MFSK16/WEFAX detection -> DC removal -> AGC). CW modes include two-stage filtering, BFO tone mixing, tone detection with SNR measurement, and keying speed estimation. RTTY uses dual bandpass mark/space filters with Baudot decoder. PSK31 uses NCO downconversion with differential phase detection and Varicode decoder. MFSK16 uses FFT tone detection with soft-decision Viterbi FEC and IZ8BLY MFSK Varicode.
 - **`drm.py`** — DRM decoder integration. Spawns the Dream 2.2 decoder as a subprocess using stdin/stdout pipes (`-I -` / `-O -`). Feeds raw int16 stereo IQ to Dream's stdin, reads decoded audio from stdout, reads JSON status from a Unix domain socket (`--status-socket`).
 - **`audio.py`** — `sounddevice` OutputStream with manual ring buffer. Handles underruns with silence.
+- **`wefax.py`** — WEFAX decoder: FM subcarrier demodulation (1900 Hz center, 1500-2300 Hz deviation), Goertzel-based start/stop tone detection, phasing sync, line-by-line image assembly, PNG auto-save to `~/Pictures/fax/`. IOC 576, 120 RPM.
+- **`decode_viewer.py`** — GTK4 decode viewer for real-time WEFAX image display. Polls temp directory for progressive rendering. Generic viewer framework extensible for future modes.
 - **`config.py`** — INI config via `configparser` at `$XDG_CONFIG_HOME/swl-demod-tool/config.conf`. Sections: `[sdr]`, `[server]`, `[audio]`, `[drm]`, `[noise_reduction]`, `[wefax]`, `[logging]`, `[state]`, `[keys]`.
 
 ### Threading Model
@@ -55,6 +57,8 @@ Multiple threads cooperate: main Textual event loop, IQ receive daemon thread (S
 - RTTY: 255-tap dual bandpass filters, 2125/2295 Hz mark/space, 170 Hz shift, 45.45 baud, ITA2/Baudot 5-bit
 - PSK31: NCO at 1000 Hz, 127-tap lowpass I/Q, 31.25 baud differential BPSK, Varicode (128-entry ASCII)
 - MFSK16: 16 tones, 15.625 Hz spacing, 15.625 baud, K=7 R=1/2 soft Viterbi, convolutional interleaver (size=4, depth=10), IZ8BLY Varicode
+- WEFAX: FM subcarrier 1900 Hz center, 1500-2300 Hz deviation, IOC 576, 120 RPM, Goertzel tone detection
+- NB max-blank: 64 consecutive samples before forced reset
 - Spectrum zoom: 1x to 1/64x via Shift+arrow keys
 - DRM: Dream 2.2 subprocess with `-c 6` (IQ positive zero-IF), IQ decimated to 48 kHz, JSON status via Unix socket
 

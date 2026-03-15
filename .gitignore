@@ -6,3 +6,5 @@ build/
 dist/
 *.egg
 *.log
+resources/
+tui-popup-playground.html

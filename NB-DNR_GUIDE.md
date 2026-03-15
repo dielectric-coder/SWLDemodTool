@@ -43,6 +43,8 @@ The NB uses sample-by-sample processing on complex IQ data:
 
 5. **Blanking** — During the blanking window, output samples are replaced with zero (complete removal, not interpolation). Zero-filling is acceptable because the subsequent FIR lowpass filter smooths the gap.
 
+6. **Max-blank safety** (`_NB_MAX_BLANK = 64`) — If blanking persists for 64 consecutive samples without interruption, the blanker assumes the trigger is not impulse noise (e.g., a strong continuous signal exceeding the threshold). It force-resets the EMA average to the current sample magnitude, clears the holdoff, and resumes normal output. This prevents the NB from muting the audio when a strong station is received with a low threshold setting.
+
 ### Threshold Presets
 
 | Preset | Factor | Behavior |
@@ -62,6 +64,7 @@ Higher factor = more sensitive (catches weaker impulses), despite the counterint
 | `_nb_holdoff_count` | int | Remaining blanking samples after impulse |
 | `_nb_threshold` | float | Current threshold factor (from preset) |
 | `_nb_threshold_name` | str | Current preset name ("Low"/"Med"/"High") |
+| `_NB_MAX_BLANK` | int (const) | Max consecutive blanked samples before forced reset (64) |
 
 ### Thread Safety
 

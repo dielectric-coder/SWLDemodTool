@@ -230,9 +230,10 @@ _blackman_cache = {}
 # ---------------------------------------------------------------------------
 
 def _nb_loop_py(mag, iq_samples, out, threshold, avg, holdoff, delay_buf,
-                lookahead, ema_alpha, holdoff_ext):
+                lookahead, ema_alpha, holdoff_ext, max_blank):
     """Pure-Python noise blanker inner loop."""
     n = len(mag)
+    blank_run = 0
     for i in range(n):
         if mag[i] < threshold * avg or avg < 1e-15:
             avg += ema_alpha * (mag[i] - avg)
@@ -242,8 +243,17 @@ def _nb_loop_py(mag, iq_samples, out, threshold, avg, holdoff, delay_buf,
             holdoff -= 1
         oldest = delay_buf[0]
         if holdoff > 0:
-            out[i] = 0.0
+            blank_run += 1
+            if blank_run >= max_blank:
+                # Stuck blanking — not impulse noise; reset average and stop
+                avg = mag[i]
+                holdoff = 0
+                blank_run = 0
+                out[i] = oldest
+            else:
+                out[i] = 0.0
         else:
+            blank_run = 0
             out[i] = oldest
         delay_buf[:-1] = delay_buf[1:]
         delay_buf[-1] = iq_samples[i]
@@ -324,9 +334,10 @@ if _HAS_NUMBA:
     @numba.njit(cache=True)
     def _nb_loop_jit(mag, iq_real, iq_imag, out_real, out_imag,
                      threshold, avg, holdoff, delay_real, delay_imag,
-                     lookahead, ema_alpha, holdoff_ext):
+                     lookahead, ema_alpha, holdoff_ext, max_blank):
         """Numba-accelerated noise blanker inner loop."""
         n = len(mag)
+        blank_run = 0
         for i in range(n):
             if mag[i] < threshold * avg or avg < 1e-15:
                 avg += ema_alpha * (mag[i] - avg)
@@ -335,9 +346,18 @@ if _HAS_NUMBA:
             elif holdoff > 0:
                 holdoff -= 1
             if holdoff > 0:
-                out_real[i] = 0.0
-                out_imag[i] = 0.0
+                blank_run += 1
+                if blank_run >= max_blank:
+                    avg = mag[i]
+                    holdoff = 0
+                    blank_run = 0
+                    out_real[i] = delay_real[0]
+                    out_imag[i] = delay_imag[0]
+                else:
+                    out_real[i] = 0.0
+                    out_imag[i] = 0.0
             else:
+                blank_run = 0
                 out_real[i] = delay_real[0]
                 out_imag[i] = delay_imag[0]
             # Shift delay buffer
@@ -531,6 +551,7 @@ _APF_Q = 15.0               # Quality factor (higher = narrower, ~50 Hz BW at Q=
 _NB_EMA_ALPHA = 0.001       # EMA smoothing for magnitude average (~slow)
 _NB_LOOKAHEAD = 8           # Samples of lookahead for blanking window
 _NB_HOLDOFF = 4             # Extend blanking window by this many samples after impulse
+_NB_MAX_BLANK = 64          # Max consecutive blanked samples before forced reset
 _NB_THRESHOLD_PRESETS = {"Low": 10.0, "Med": 20.0, "High": 40.0}
 
 # Spectral DNR constants — spectral gate with percentile noise estimation
@@ -884,14 +905,15 @@ class Demodulator:
                 iq_samples.imag.astype(np.float64),
                 out_real, out_imag, threshold, avg, holdoff,
                 delay_real, delay_imag, lookahead,
-                _NB_EMA_ALPHA, _NB_HOLDOFF)
+                _NB_EMA_ALPHA, _NB_HOLDOFF, _NB_MAX_BLANK)
             out = (out_real + 1j * out_imag).astype(np.complex64)
             delay_buf[:] = (delay_real + 1j * delay_imag).astype(np.complex64)
         else:
             out = np.empty(n, dtype=np.complex64)
             avg, holdoff = _nb_loop_py(
                 mag, iq_samples, out, threshold, avg, holdoff,
-                delay_buf, lookahead, _NB_EMA_ALPHA, _NB_HOLDOFF)
+                delay_buf, lookahead, _NB_EMA_ALPHA, _NB_HOLDOFF,
+                _NB_MAX_BLANK)
 
         self._nb_avg_mag = avg
         self._nb_holdoff_count = int(holdoff)

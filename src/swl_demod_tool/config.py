@@ -73,7 +73,6 @@ DEFAULT_KEYS = {
     "cycle_nb_threshold": "n",
     "cycle_dnr": "N",
     "toggle_auto_notch": "alt+n",
-    "toggle_spectrum": "d",
     "log_entry": "l",
 }
 

@@ -99,7 +99,6 @@ All keybindings are configurable via the `[keys]` section in `config.conf`.
 | `f`             | Cycle RIT step (1 / 10 / 100 Hz)    |
 | `Shift+→`       | Zoom into spectrum                  |
 | `Shift+←`       | Zoom out of spectrum                |
-| `d`             | Toggle spectrum display             |
 | `n`             | Cycle Noise Blanker (Off / Low / Med / High) |
 | `N` (Shift+N)   | Cycle DNR level (Off / 1 / 2 / 3)  |
 | `Alt+n`         | Toggle auto notch filter (DNF)      |
@@ -110,7 +109,7 @@ All keybindings are configurable via the `[keys]` section in `config.conf`.
 ## Display Layout
 
 ```
-  SWL Demod Tool v0.5.4     12:34:56 UTC
+  SWL Demod Tool v0.5.6     12:34:56 UTC
   ╭─░▒▓  Freq ► ╰─⏺ [kHz]
     IQ ● Elad FDM-DUO  localhost:4533  192000 Hz 32-bit IQ
    CAT ● Elad FDM-DUO  localhost:4532
@@ -172,6 +171,7 @@ A dedicated panel below the audio info displays mode-specific indicators:
 | RTTY- | FSK (mark/space, reverse) | Radio Teletype, reversed polarity |
 | PSK31 | BPSK differential       | Phase Shift Keying, 31.25 Bd, Varicode |
 | MFSK16| 16-tone FSK + Viterbi FEC | Multi-FSK, 15.625 Bd, MFSK Varicode |
+| WEFAX | FM subcarrier (1900 Hz)   | Weather Fax, IOC 576, 120 RPM, auto-save PNG |
 | DRM   | Dream decoder | Digital Radio Mondiale, requires Dream binary |
 
 ### SAM and ECSS
@@ -208,6 +208,14 @@ The mode info panel shows the detected tone index, tone confidence percentage, S
 
 MFSK16 is commonly used on HF for keyboard-to-keyboard QSOs and is popular for its strong error correction and resistance to multipath fading. It is supported by fldigi and other amateur radio software.
 
+### WEFAX Mode
+
+WEFAX (Weather Fax) receives HF weather charts transmitted as grayscale images. The decoder uses FM subcarrier demodulation centered at 1900 Hz (black=1500 Hz, white=2300 Hz), IOC 576 standard at 120 RPM (2 lines/second).
+
+The decoder automatically detects start tones (300 Hz), synchronizes on phasing pulses, assembles the image line-by-line, and saves completed faxes as grayscale PNG files to `~/Pictures/fax/`. The output directory is configurable via the `[wefax]` config section.
+
+A separate GTK4 viewer window displays the fax image in real-time as scan lines arrive. The viewer is launched automatically when WEFAX mode is selected (requires GTK4/PyGObject). Decoding continues regardless of whether the viewer is running.
+
 ### RIT (Receiver Incremental Tuning)
 
 In SSB and CW modes, `↑`/`↓` tune the receiver by the current RIT step. Press `f` to cycle the step size: 1 → 10 → 100 Hz. The cumulative RIT offset and current step are shown in the mode info panel. RIT resets to zero when using coarse tuning, direct frequency entry, or changing mode.
@@ -224,7 +232,7 @@ Two noise reduction features operate at different stages of the DSP pipeline:
 | Med       | 20×    | General purpose (default) |
 | High      | 40×    | Weak/frequent impulses |
 
-**Dynamic Noise Reduction (DNR)** — Press `f` to cycle through levels. Operates on the detected audio using a spectral gate with percentile-based noise floor estimation. Reduces broadband noise (hiss) while preserving signal content. The noise floor takes 1-2 seconds to settle after tuning.
+**Dynamic Noise Reduction (DNR)** — Press `Shift+N` to cycle through levels. Operates on the detected audio using a spectral gate with percentile-based noise floor estimation. Reduces broadband noise (hiss) while preserving signal content. The noise floor takes 1-2 seconds to settle after tuning.
 
 | Level | Noise reduction | Character |
 |-------|----------------|-----------|

@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.5.6] - 2026-03-15
+
+### Added
+- **Demod bandwidth reporting** (`DM` protocol): Reports current demodulation mode and bandwidth to EladSpectrum's CAT server, drawing yellow bandwidth lines on the waterfall display. Updates on mode change, bandwidth change, and periodically (1s poll). Cleared on exit.
+- **WEFAX demodulation mode**: HF Weather Fax reception with FM subcarrier demodulation (1900 Hz center, 1500-2300 Hz deviation), start/stop tone detection via Goertzel filters, phasing sync, and line-by-line image assembly. Completed faxes auto-saved as grayscale PNG to `~/Pictures/fax/`. IOC 576 standard, 120 RPM.
+- **GTK4 decode viewer**: Separate GTK4 window (`decode_viewer.py`) for real-time WEFAX image display. Polls shared temp files for progressive rendering as scan lines arrive. Designed as a generic decode viewer extensible for future modes.
+
+### Changed
+- **Noise blanker max-blank safety**: Added `_NB_MAX_BLANK = 64` consecutive-sample limit. If the blanker stays in blanking mode for 64+ consecutive samples (not impulse noise), it force-resets the EMA average and resumes normal output. Prevents the NB from muting the signal on strong continuous interference that is not impulse-shaped.
+- Mode cycle updated: AM → SAM → SAM-U → SAM-L → USB → LSB → CW+ → CW- → RTTY+ → RTTY- → PSK31 → MFSK16 → WEFAX → DRM.
+
+### Removed
+- **Spectrum toggle keybinding** (`d`): The `toggle_spectrum` action and its default keybinding have been removed.
+
 ## [0.5.5] - 2026-03-14
 
 ### Added

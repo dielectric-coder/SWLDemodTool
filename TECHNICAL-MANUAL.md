@@ -20,12 +20,13 @@ A deep-dive into the software architecture, DSP pipelines, and radio theory behi
 12. [RTTY Demodulation and Baudot Decoding](#12-rtty-demodulation-and-baudot-decoding)
 13. [PSK31 Demodulation and Varicode](#13-psk31-demodulation-and-varicode)
 14. [MFSK16 with Viterbi FEC](#14-mfsk16-with-viterbi-fec)
-15. [DRM Decoding via Dream](#15-drm-decoding-via-dream)
-16. [Audio Output and the Lock-Free Ring Buffer](#16-audio-output-and-the-lock-free-ring-buffer)
-17. [CAT Control Protocol](#17-cat-control-protocol)
-18. [Threading Model and Data Flow](#18-threading-model-and-data-flow)
-19. [SNR Estimation](#19-snr-estimation)
-20. [Glossary](#20-glossary)
+15. [WEFAX (Weather Fax) Decoding](#15-wefax-weather-fax-decoding)
+16. [DRM Decoding via Dream](#16-drm-decoding-via-dream)
+17. [Audio Output and the Lock-Free Ring Buffer](#17-audio-output-and-the-lock-free-ring-buffer)
+18. [CAT Control Protocol](#18-cat-control-protocol)
+19. [Threading Model and Data Flow](#19-threading-model-and-data-flow)
+20. [SNR Estimation](#20-snr-estimation)
+21. [Glossary](#21-glossary)
 
 ---
 
@@ -252,6 +253,8 @@ For each sample:
 ```
 
 Three threshold presets are available: Low (10x), Med (20x), High (40x).
+
+A safety limit (`_NB_MAX_BLANK = 64`) prevents runaway blanking: if 64 consecutive samples are blanked without interruption, the blanker assumes the signal is not impulse noise, force-resets the EMA average to the current magnitude, and resumes normal output.
 
 ### Dynamic Noise Reduction (DNR)
 
@@ -673,7 +676,53 @@ Unlike PSK31 Varicode, MFSK uses a different variable-length code designed by IZ
 
 ---
 
-## 15. DRM Decoding via Dream
+## 15. WEFAX (Weather Fax) Decoding
+
+**Module:** `wefax.py`
+
+HF Weather Fax (WEFAX) transmits grayscale weather charts as analog images using FM subcarrier modulation. It is widely used by meteorological services worldwide.
+
+### FM Subcarrier Demodulation
+
+The audio signal carries an FM subcarrier centered at 1900 Hz:
+- **Black:** 1500 Hz
+- **White:** 2300 Hz
+- **Deviation:** 800 Hz
+
+The demodulator extracts the instantaneous frequency of the subcarrier and maps it linearly to a grayscale pixel value (0-255).
+
+### Image Parameters (IOC 576)
+
+- **IOC (Index of Cooperation):** 576 — defines the line width as `576 × π ≈ 1810` pixels
+- **RPM:** 120 — gives 2 scan lines per second
+- **Line duration:** 500 ms at 48 kHz audio rate
+
+### State Machine
+
+```
+IDLE → START_TONE (300 Hz detected for ~3s)
+     → PHASING (alternating B/W sync pulses for line alignment)
+     → RECEIVING (pixel assembly, line by line)
+     → STOP_TONE (450 Hz detected) → save PNG → IDLE
+```
+
+**Tone detection** uses Goertzel filters — efficient single-frequency DFT bins — tuned to the start (300 Hz) and stop (450 Hz) tones. The Goertzel algorithm is preferred over a full FFT because only two specific frequencies need monitoring.
+
+**Phasing** synchronization detects the alternating black/white sync pulses at the start of each line, establishing the correct line-start position.
+
+### Output
+
+Completed faxes are saved as grayscale PNG files to `~/Pictures/fax/` (configurable via `[wefax]` config section). Intermediate data is written to a temp directory (`image.raw` + `meta.json`) for the GTK4 decode viewer to poll.
+
+### GTK4 Decode Viewer
+
+**Module:** `decode_viewer.py`
+
+A separate GTK4 window polls the WEFAX temp directory and displays the image in real-time as scan lines arrive. The viewer is launched as a subprocess when WEFAX mode is selected and requires GTK4/PyGObject. It is designed as a generic decode viewer extensible for future modes.
+
+---
+
+## 16. DRM Decoding via Dream
 
 **Module:** `drm.py`
 
@@ -728,7 +777,7 @@ The JSON status provides:
 
 ---
 
-## 16. Audio Output and the Lock-Free Ring Buffer
+## 17. Audio Output and the Lock-Free Ring Buffer
 
 **Module:** `audio.py`
 
@@ -784,7 +833,7 @@ This is preferable to blocking the DSP thread, which would back up the entire pi
 
 ---
 
-## 17. CAT Control Protocol
+## 18. CAT Control Protocol
 
 **Module:** `cat_client.py`
 
@@ -827,7 +876,7 @@ Binary search (`bisect`) gives O(log n) lookup.
 
 ---
 
-## 18. Threading Model and Data Flow
+## 19. Threading Model and Data Flow
 
 ```
 +------------------------------------------------------------------+
@@ -874,7 +923,7 @@ Binary search (`bisect`) gives O(log n) lookup.
 
 ---
 
-## 19. SNR Estimation
+## 20. SNR Estimation
 
 **Theory:** Signal-to-Noise Ratio measures signal quality. Higher SNR means clearer audio.
 
@@ -895,7 +944,7 @@ The asymmetry prevents brief signal peaks from inflating the noise floor estimat
 
 ---
 
-## 20. Glossary
+## 21. Glossary
 
 | Term | Definition |
 |------|-----------|
@@ -935,4 +984,5 @@ The asymmetry prevents brief signal peaks from inflating the noise floor estimat
 | **Varicode** | Variable-length character encoding (used by PSK31 and MFSK16) |
 | **VFO** | Variable Frequency Oscillator — the tuning element of a radio |
 | **Viterbi** | Maximum-likelihood sequence decoder for convolutional codes |
+| **WEFAX** | Weather Fax — analog image transmission via FM subcarrier on HF |
 | **Windowing** | Multiplying signal by a taper function to reduce spectral leakage in FFT |

@@ -13,10 +13,11 @@ src/swl_demod_tool/
         registry.py   # Backend registry and factory function
     iq_client.py      # TCP client for Elad IQ sample stream (used by elad_fdmduo backend)
     cat_client.py     # TCP client for Elad CAT radio control (used by elad_fdmduo backend)
-    dsp.py            # DSP: FFT spectrum, sparkline rendering, AM/SSB/CW/RTTY/PSK31/MFSK16 demodulator, noise reduction
+    dsp.py            # DSP: FFT spectrum, sparkline rendering, AM/SSB/CW/RTTY/PSK31/MFSK16/WEFAX demodulator, noise reduction
     drm.py            # DRM decoder integration (Dream subprocess)
+    wefax.py          # WEFAX decoder (FM subcarrier demod, image assembly, PNG save)
+    decode_viewer.py  # GTK4 decode viewer (WEFAX real-time image display)
     audio.py          # Audio output via sounddevice with ring buffer
-    wefax.py          # WEFAX decoder (APT line detection, image assembly)
     config.py         # INI config file handling
 ```
 
@@ -101,6 +102,8 @@ Kenwood TS-480 compatible, semicolon-terminated ASCII commands over TCP.
 
 The CAT poller queries VFO and frequency each cycle so external frequency changes are tracked. Mode and bandwidth are local to the app and not polled from the radio.
 
+**DM (Demod Mode/Bandwidth) Protocol:** The app sends `DM<mode><bandwidth>;` commands to report the current demodulation mode and bandwidth to EladSpectrum's spectrum display. This draws yellow bandwidth marker lines on the waterfall. Mode codes: `AM`, `SU` (USB/RTTY+/PSK31/MFSK16), `SL` (LSB/RTTY-), `CW`, `FM`. Bandwidth in Hz. `DM;` (no arguments) clears the display. Sent on mode change, bandwidth change, and periodically (1s poll).
+
 **S-meter mapping (SM command P2 values):**
 
 | Value | S-Unit | Value | S-Unit |
@@ -128,7 +131,7 @@ Mode codes in IF response (char 29): 1=LSB, 2=USB, 3=CW, 4=FM, 5=AM, 7=CW-R
 - Station name from FIFO (bold gold, left side) when available
 - Span indicator (right side)
 
-**AM/SAM/SSB/CW/RTTY/PSK31/MFSK16 demodulation:**
+**AM/SAM/SSB/CW/RTTY/PSK31/MFSK16/WEFAX demodulation:**
 ```
 IQ (192 kHz) -> [Noise Blanker] (impulse detection + zeroing)
              -> FIR lowpass (127-tap, scipy firwin)
@@ -144,6 +147,7 @@ IQ (192 kHz) -> [Noise Blanker] (impulse detection + zeroing)
                   RTTY+/RTTY- = dual bandpass (mark/space) -> envelope compare -> Baudot decode
                   PSK31 = NCO downconvert -> lowpass I/Q -> differential phase -> Varicode decode
                   MFSK16 = FFT tone detect -> soft decode -> convolutional interleaver -> Viterbi -> MFSK Varicode
+                  WEFAX  = FM subcarrier demod (1900 Hz) -> Goertzel tone detect -> image assembly -> PNG save
              -> [DNR] (spectral gate, STFT overlap-add)
              -> DC removal (smoothed mean subtraction)
              -> AGC (block-based, fast attack / slow decay)
@@ -152,7 +156,7 @@ IQ (192 kHz) -> [Noise Blanker] (impulse detection + zeroing)
              -> audio output (48 kHz)
 ```
 
-**Noise Blanker:** Operates on raw IQ at full sample rate (192 kHz). Computes instantaneous magnitude and compares against a slow EMA average. Samples exceeding `threshold × average` are zeroed, with an 8-sample lookahead delay buffer and 4-sample holdoff to catch the rising edge of impulses. Three threshold presets (Low 10×, Med 20×, High 40×).
+**Noise Blanker:** Operates on raw IQ at full sample rate (192 kHz). Computes instantaneous magnitude and compares against a slow EMA average. Samples exceeding `threshold × average` are zeroed, with an 8-sample lookahead delay buffer and 4-sample holdoff to catch the rising edge of impulses. Three threshold presets (Low 10×, Med 20×, High 40×). A safety limit (`_NB_MAX_BLANK = 64`) forces a reset if blanking persists for 64+ consecutive samples, preventing the NB from muting continuous non-impulse signals.
 
 **DNR (Dynamic Noise Reduction):** Spectral gate using 512-point STFT with 50% overlap (Hann window, proper synthesis window for OLA reconstruction). Noise floor estimated per-frame as the 30th percentile of passband bin powers (bins within the demodulation bandwidth, excluding DC). Bins above `threshold × noise_floor` pass through at gain 1.0; bins at or below get attenuated to `gain_floor`; smooth linear interpolation between. DC bin always passes (preserves AM carrier). Temporal gain smoothing (0.5 factor) prevents per-frame flutter. Three levels control the gate threshold and floor depth.
 
