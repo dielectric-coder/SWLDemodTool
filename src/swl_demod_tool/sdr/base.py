@@ -74,3 +74,11 @@ class SDRSource(ABC):
     def get_mode(self) -> Optional[str]:
         """Query current mode string."""
         return None
+
+    def send_demod_status(self, mode: str, bandwidth_hz: int) -> None:
+        """Report demod bandwidth to spectrum display (if supported)."""
+        pass
+
+    def clear_demod_status(self) -> None:
+        """Clear demod bandwidth display (if supported)."""
+        pass

@@ -159,6 +159,35 @@ class CATClient:
     _SM_VALS = ["S0", "S1", "S2", "S3", "S4", "S5", "S6", "S7",
                 "S8", "S9", "S9+10", "S9+20", "S9+30", "S9+40", "S9+50", "S9+60"]
 
+    # Demod mode -> 2-char DM protocol code
+    _DM_MODE_MAP = {
+        "AM": "AM", "SAM": "AM", "SAM-U": "AM", "SAM-L": "AM",
+        "USB": "SU", "LSB": "SL",
+        "CW+": "CW", "CW-": "CW",
+        "FM": "FM",
+        "RTTY+": "SU", "RTTY-": "SL",
+        "PSK31": "SU", "MFSK16": "SU",
+        "WEFAX": "AM", "DRM": "AM",
+    }
+
+    def send_demod_status(self, mode, bandwidth_hz):
+        """Send DM command to report demodulation bandwidth to spectrum display.
+
+        Args:
+            mode: Demod mode string (e.g., "AM", "USB", "CW+")
+            bandwidth_hz: Bandwidth in Hz (0 or None to clear)
+        """
+        if not bandwidth_hz:
+            self.send_command("DM")
+            return
+        code = self._DM_MODE_MAP.get(mode, "AM")
+        cmd = f"DM{code}{int(bandwidth_hz):05d}"
+        self.send_command(cmd)
+
+    def clear_demod_status(self):
+        """Send DM; to clear demod bandwidth display."""
+        self.send_command("DM")
+
     def get_s_meter(self):
         """Query S-meter via SM command. Returns (s_unit_str, raw_value) or None."""
         resp = self.send_command("SM0;")

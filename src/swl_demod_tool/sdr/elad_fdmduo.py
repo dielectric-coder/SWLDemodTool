@@ -69,3 +69,11 @@ class EladFDMDuoSource(SDRSource):
 
     def get_mode(self):
         return self._cat.get_mode()
+
+    def send_demod_status(self, mode, bandwidth_hz):
+        """Report demod bandwidth to spectrum display via DM command."""
+        self._cat.send_demod_status(mode, bandwidth_hz)
+
+    def clear_demod_status(self):
+        """Clear demod bandwidth display."""
+        self._cat.clear_demod_status()
