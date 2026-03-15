@@ -1,9 +1,12 @@
 """TCP client for receiving IQ samples from Elad Spectrum IQ server."""
 
+import logging
 import socket
 import struct
 import threading
 import numpy as np
+
+log = logging.getLogger(__name__)
 
 HEADER_SIZE = 16
 HEADER_MAGIC = b"ELAD"
@@ -24,8 +27,14 @@ class IQClient:
 
     def connect(self):
         """Connect to IQ server and read header."""
+        if self.sock:
+            try:
+                self.sock.close()
+            except OSError:
+                pass
         try:
             self.sock = socket.create_connection((self.host, self.port), timeout=5)
+            self.sock.settimeout(10.0)
             # Read 16-byte header
             header = self._recv_exact(HEADER_SIZE)
             if header is None or header[:4] != HEADER_MAGIC:
@@ -34,6 +43,10 @@ class IQClient:
             magic, self.sample_rate, self.format_bits, _ = struct.unpack(
                 "<4sIII", header
             )
+            if self.sample_rate == 0:
+                log.error("Server reported zero sample rate")
+                self.disconnect()
+                return False
             self.connected = True
             return True
         except (OSError, TimeoutError):
@@ -60,6 +73,8 @@ class IQClient:
         callback(iq_array): called with numpy complex64 array of IQ samples.
         """
         if not self.connected:
+            return
+        if self._thread is not None and self._thread.is_alive():
             return
         self._callback = callback
         self._running = True

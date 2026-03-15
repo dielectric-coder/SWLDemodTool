@@ -1,8 +1,11 @@
 """TCP client for sending CAT commands to Elad Spectrum CAT server."""
 
 import bisect
+import logging
 import socket
 import threading
+
+log = logging.getLogger(__name__)
 
 # Maximum bytes to buffer when waiting for a ';' terminator
 _MAX_RESPONSE_LEN = 4096
@@ -17,6 +20,11 @@ class CATClient:
         self._lock = threading.Lock()
 
     def connect(self):
+        if self.sock:
+            try:
+                self.sock.close()
+            except OSError:
+                pass
         try:
             self.sock = socket.create_connection((self.host, self.port), timeout=5)
             self.sock.settimeout(2)
@@ -61,6 +69,8 @@ class CATClient:
                         return None
                 # Return only up to the first ';' terminator
                 end = data.index(b";") + 1
+                if end < len(data):
+                    log.debug("CAT response contained extra data after delimiter: %r", data[end:])
                 return data[:end].decode("ascii", errors="replace").strip()
             except (OSError, TimeoutError):
                 self.connected = False

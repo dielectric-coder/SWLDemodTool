@@ -66,14 +66,10 @@ class AudioOutput:
 
         available = self._capacity - self._buffered()
         if n > available:
-            # Overflow: advance read pointer to make room, dropping oldest
-            # samples.  Then write what fits (up to capacity).
-            if n > self._capacity:
-                samples = samples[-self._capacity:]
-                n = self._capacity
-            # Advance read pointer to free exactly n slots
-            drop = n - available
-            self._read_pos = (self._read_pos + drop) % self._buf_len
+            # Drop oldest input samples, keep the most recent that fit
+            skip = n - available
+            samples = samples[skip:]
+            n = available
             self._overflow_count += 1
 
         wp = self._write_pos

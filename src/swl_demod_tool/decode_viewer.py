@@ -119,7 +119,8 @@ class WefaxView:
 
         # Read raw image data
         try:
-            raw = open(raw_path, "rb").read()
+            with open(raw_path, "rb") as f:
+                raw = f.read()
         except (FileNotFoundError, OSError):
             return True
 

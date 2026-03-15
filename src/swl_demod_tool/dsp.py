@@ -224,6 +224,9 @@ _RTTY_BIT_SMOOTH = 0.3         # EMA smoothing for mark/space discriminator
 # Cached Blackman window for spectrum computation
 _blackman_cache = {}
 
+# Cached Hanning window for SNR / CW tone analysis
+_hanning_cache = {}
+
 
 # ---------------------------------------------------------------------------
 # Numba-accelerated inner loops (fall back to plain Python if unavailable)
@@ -467,7 +470,7 @@ def compute_spectrum_db(iq_samples, fft_size=4096):
 
     windowed = iq_samples[:fft_size] * window
     spectrum = _fftshift(_fft(windowed))
-    power = np.maximum(np.abs(spectrum) ** 2, 1e-20)
+    power = np.maximum(spectrum.real ** 2 + spectrum.imag ** 2, 1e-20)
     db = 10.0 * np.log10(power) - 10.0 * np.log10(fft_size)
     return db.astype(np.float32)
 
@@ -590,7 +593,8 @@ class Demodulator:
     def __init__(self, iq_sample_rate=192000, audio_rate=48000, bandwidth=5000):
         self.iq_sample_rate = iq_sample_rate
         self.audio_rate = audio_rate
-        assert iq_sample_rate % audio_rate == 0, "IQ rate must be exact multiple of audio rate"
+        if iq_sample_rate % audio_rate != 0:
+            raise ValueError("IQ rate must be exact multiple of audio rate")
         self.decimation = iq_sample_rate // audio_rate
         self.bandwidth = bandwidth
         self.mode = "AM"
@@ -808,13 +812,14 @@ class Demodulator:
         if bandwidth == self.bandwidth:
             return
         self.bandwidth = max(100, min(bandwidth, self.iq_sample_rate // 2 - 1))
-        if self.mode in ("CW+", "CW-"):
-            self._lp_taps, self._lp_zi_i = _make_filter(127, _CW_PREFILTER_HZ, self.iq_sample_rate)
-            _, self._lp_zi_q = _make_filter(127, _CW_PREFILTER_HZ, self.iq_sample_rate)
-            self._update_cw_filter()
-        else:
-            self._lp_taps, self._lp_zi_i = _make_filter(127, self.bandwidth, self.iq_sample_rate)
-            _, self._lp_zi_q = _make_filter(127, self.bandwidth, self.iq_sample_rate)
+        with self._lock:
+            if self.mode in ("CW+", "CW-"):
+                self._lp_taps, self._lp_zi_i = _make_filter(127, _CW_PREFILTER_HZ, self.iq_sample_rate)
+                _, self._lp_zi_q = _make_filter(127, _CW_PREFILTER_HZ, self.iq_sample_rate)
+                self._update_cw_filter()
+            else:
+                self._lp_taps, self._lp_zi_i = _make_filter(127, self.bandwidth, self.iq_sample_rate)
+                _, self._lp_zi_q = _make_filter(127, self.bandwidth, self.iq_sample_rate)
 
     def _measure_snr(self, i_dec, q_dec):
         """Estimate in-band SNR from decimated IQ using spectral analysis.
@@ -837,9 +842,11 @@ class Demodulator:
         self._snr_buf = self._snr_buf[-fft_size // 2:]  # keep overlap
 
         # Power spectrum
-        window = np.hanning(fft_size).astype(np.float32)
+        if fft_size not in _hanning_cache:
+            _hanning_cache[fft_size] = np.hanning(fft_size).astype(np.float32)
+        window = _hanning_cache[fft_size]
         spec = _fft(frame * window)
-        spec_power = np.abs(spec) ** 2
+        spec_power = spec.real ** 2 + spec.imag ** 2
 
         # Select only passband bins (±bandwidth around DC)
         bin_hz = self.audio_rate / fft_size
@@ -944,7 +951,7 @@ class Demodulator:
 
             # Analysis
             spectrum = _rfft(frame * self._dnr_window)
-            power = np.abs(spectrum) ** 2
+            power = (spectrum * np.conj(spectrum)).real
 
             self._dnr_frame_count += 1
 
@@ -1023,26 +1030,25 @@ class Demodulator:
             self._an_in_buf = self._an_in_buf[hop:]
 
             spectrum = _rfft(frame * self._an_window)
-            power = np.abs(spectrum) ** 2
+            power = (spectrum * np.conj(spectrum)).real
             n_bins = len(power)
 
             self._an_frame_count += 1
 
             # Detect peaks: compare each bin to local median of neighbors
             gain = np.ones(n_bins, dtype=np.float32)
-            for b in range(1, n_bins - 1):  # skip DC and Nyquist
-                lo = max(1, b - _AN_NEIGHBOR_BINS)
-                hi = min(n_bins - 1, b + _AN_NEIGHBOR_BINS + 1)
-                # Exclude the center notch region from the median calculation
-                notch_lo = max(1, b - _AN_NOTCH_HALFWIDTH)
-                notch_hi = min(n_bins - 1, b + _AN_NOTCH_HALFWIDTH + 1)
-                neighbors = np.concatenate((power[lo:notch_lo], power[notch_hi:hi]))
-                if len(neighbors) == 0:
-                    continue
-                local_med = np.median(neighbors)
-                if local_med > 0 and power[b] > local_med * _AN_PEAK_THRESH:
-                    # This bin is a tonal peak — mark for notching
-                    gain[b] = 0.0
+            nb = _AN_NEIGHBOR_BINS
+            nw = _AN_NOTCH_HALFWIDTH
+            win_size = 2 * nb + 1
+            padded = np.pad(power, nb, mode='edge')
+            windows = np.lib.stride_tricks.sliding_window_view(padded, win_size)
+            center = nb
+            mask = np.ones(win_size, dtype=bool)
+            mask[center - nw:center + nw + 1] = False
+            neighbor_vals = windows[1:n_bins - 1, :][:, mask]
+            local_med = np.median(neighbor_vals, axis=1)
+            peaks = (local_med > 0) & (power[1:n_bins - 1] > local_med * _AN_PEAK_THRESH)
+            gain[1:n_bins - 1] = np.where(peaks, 0.0, 1.0)
 
             # Expand notch to halfwidth around detected peaks
             notch_mask = gain == 0.0
@@ -1223,8 +1229,11 @@ class Demodulator:
         """Measure peak audio frequency and SNR for CW tuning indicator."""
         fft_n = _CW_FFT_SIZE
         bin_hz = self.audio_rate / fft_n
-        win = np.hanning(fft_n).astype(np.float32)
-        spec = np.abs(_rfft(ordered_buf * win)) ** 2
+        if fft_n not in _hanning_cache:
+            _hanning_cache[fft_n] = np.hanning(fft_n).astype(np.float32)
+        win = _hanning_cache[fft_n]
+        rfft_out = _rfft(ordered_buf * win)
+        spec = (rfft_out * np.conj(rfft_out)).real
 
         lo = max(1, int((self._bfo_offset - self.bandwidth) / bin_hz))
         hi = min(len(spec) - 1, int((self._bfo_offset + self.bandwidth) / bin_hz))
@@ -1367,11 +1376,13 @@ class Demodulator:
 
     def get_snr_db(self):
         """Return estimated in-band SNR in dB."""
-        return self._snr_db
+        with self._lock:
+            return self._snr_db
 
     @property
     def bfo_offset(self):
-        return self._bfo_offset
+        with self._lock:
+            return self._bfo_offset
 
     def _cw_measure_speed(self, audio):
         """Detect CW keying envelope, estimate speed, and decode Morse.
@@ -1638,7 +1649,8 @@ class Demodulator:
 
     def get_rtty_levels(self):
         """Return smoothed (mark_level, space_level) for tuning indicator."""
-        return self._rtty_mark_level, self._rtty_space_level
+        with self._lock:
+            return self._rtty_mark_level, self._rtty_space_level
 
     def _detect_psk31(self, i_dec, q_dec):
         """BPSK31 detection: downconvert, lowpass, symbol clock recovery, differential decode, Varicode.
@@ -1903,7 +1915,8 @@ class Demodulator:
 
     def get_mfsk_tone(self):
         """Return (tone_index, confidence) for MFSK16 display."""
-        return self._mfsk_tone_idx, self._mfsk_tone_confidence
+        with self._lock:
+            return self._mfsk_tone_idx, self._mfsk_tone_confidence
 
     # --- WEFAX support ---
 
@@ -1915,9 +1928,10 @@ class Demodulator:
 
     def get_wefax_raw(self):
         """Return and clear the WEFAX raw audio buffer."""
-        raw = self._wefax_raw
-        self._wefax_raw = None
-        return raw
+        with self._lock:
+            raw = self._wefax_raw
+            self._wefax_raw = None
+            return raw
 
     def get_cw_text(self):
         """Return the decoded CW text buffer."""
@@ -1939,15 +1953,18 @@ class Demodulator:
 
     def get_cw_peak_hz(self):
         """Return the smoothed peak audio frequency in CW mode."""
-        return self._cw_peak_hz
+        with self._lock:
+            return self._cw_peak_hz
 
     def get_cw_tone_present(self):
         """Return whether a CW tone is detected above the noise floor."""
-        return self._cw_tone_present
+        with self._lock:
+            return self._cw_tone_present
 
     def get_cw_snr_db(self):
         """Return CW tone SNR in dB."""
-        return self._cw_snr_db
+        with self._lock:
+            return self._cw_snr_db
 
     def get_cw_wpm(self):
         """Return estimated CW speed in words per minute."""
@@ -1956,9 +1973,10 @@ class Demodulator:
 
     def get_pll_offset_hz(self):
         """Return PLL tracking offset in Hz (0.0 for non-SAM modes)."""
-        if self.mode not in ("SAM", "SAM-U", "SAM-L"):
-            return 0.0
-        return self._pll_freq * self.audio_rate / (2.0 * np.pi)
+        with self._lock:
+            if self.mode not in ("SAM", "SAM-U", "SAM-L"):
+                return 0.0
+            return self._pll_freq * self.audio_rate / (2.0 * np.pi)
 
     def _pll_detect(self, i_samples, q_samples, mode="SAM"):
         """PLL-based synchronous AM detection."""
@@ -1986,102 +2004,101 @@ class Demodulator:
 
     def reset(self):
         """Reset all filter, AGC, PLL, and noise reduction state."""
-        self._lp_taps, self._lp_zi_i = _make_filter(127, self.bandwidth, self.iq_sample_rate)
-        _, self._lp_zi_q = _make_filter(127, self.bandwidth, self.iq_sample_rate)
-        # Reset SNR estimator
-        self._snr_db = 0.0
-        self._snr_signal_power = 0.0
-        self._snr_noise_floor = 0.0
-        self._snr_buf = np.zeros(0, dtype=np.complex64)
-        # Reset noise blanker
-        self._nb_avg_mag = 0.0
-        self._nb_delay_buf[:] = 0.0
-        self._nb_holdoff_count = 0
-        # Reset spectral DNR
-        n_bins = _DNR_FFT_SIZE // 2 + 1
-        self._dnr_in_buf = np.zeros(0, dtype=np.float32)
-        self._dnr_prev_frame = np.zeros(_DNR_HOP, dtype=np.float32)
-        self._dnr_noise_floor = 0.0
-        self._dnr_prev_gain = np.ones(n_bins, dtype=np.float32)
-        self._dnr_frame_count = 0
-        # Reset auto notch
-        an_bins = _AN_FFT_SIZE // 2 + 1
-        self._an_in_buf = np.zeros(0, dtype=np.float32)
-        self._an_prev_frame = np.zeros(_AN_HOP, dtype=np.float32)
-        self._an_persist = np.zeros(an_bins, dtype=np.float32)
-        self._an_prev_gain = np.ones(an_bins, dtype=np.float32)
-        self._an_frame_count = 0
-        self._dc_avg = 0.0
-        self._agc_gain = _AGC_INITIAL_GAIN
-        self._pll_phase = 0.0
-        self._pll_freq = 0.0
-        self._bfo_phase = 0.0
-        self._cw_buf[:] = 0.0
-        self._cw_buf_pos = 0
-        self._cw_peak_hz = 0.0
-        self._cw_tone_present = False
-        self._cw_snr_db = 0.0
-        self._cw_env = 0.0
-        self._cw_env_peak = 0.0
-        self._cw_key_down = False
-        self._cw_edge_sample = 0
-        self._cw_sample_count = 0
         with self._lock:
+            self._lp_taps, self._lp_zi_i = _make_filter(127, self.bandwidth, self.iq_sample_rate)
+            _, self._lp_zi_q = _make_filter(127, self.bandwidth, self.iq_sample_rate)
+            # Reset SNR estimator
+            self._snr_db = 0.0
+            self._snr_signal_power = 0.0
+            self._snr_noise_floor = 0.0
+            self._snr_buf = np.zeros(0, dtype=np.complex64)
+            # Reset noise blanker
+            self._nb_avg_mag = 0.0
+            self._nb_delay_buf[:] = 0.0
+            self._nb_holdoff_count = 0
+            # Reset spectral DNR
+            n_bins = _DNR_FFT_SIZE // 2 + 1
+            self._dnr_in_buf = np.zeros(0, dtype=np.float32)
+            self._dnr_prev_frame = np.zeros(_DNR_HOP, dtype=np.float32)
+            self._dnr_noise_floor = 0.0
+            self._dnr_prev_gain = np.ones(n_bins, dtype=np.float32)
+            self._dnr_frame_count = 0
+            # Reset auto notch
+            an_bins = _AN_FFT_SIZE // 2 + 1
+            self._an_in_buf = np.zeros(0, dtype=np.float32)
+            self._an_prev_frame = np.zeros(_AN_HOP, dtype=np.float32)
+            self._an_persist = np.zeros(an_bins, dtype=np.float32)
+            self._an_prev_gain = np.ones(an_bins, dtype=np.float32)
+            self._an_frame_count = 0
+            self._dc_avg = 0.0
+            self._agc_gain = _AGC_INITIAL_GAIN
+            self._pll_phase = 0.0
+            self._pll_freq = 0.0
+            self._bfo_phase = 0.0
+            self._cw_buf[:] = 0.0
+            self._cw_buf_pos = 0
+            self._cw_peak_hz = 0.0
+            self._cw_tone_present = False
+            self._cw_snr_db = 0.0
+            self._cw_env = 0.0
+            self._cw_env_peak = 0.0
+            self._cw_key_down = False
+            self._cw_edge_sample = 0
+            self._cw_sample_count = 0
             self._cw_element_ms = []
             self._cw_wpm = 0.0
             self._cw_decoded_text = ""
-        self._cw_current_char = []
-        self._cw_last_keyup_sample = 0
-        self._cw_dit_ms = 0.0
-        self._cw_pending_edges = []
-        # Reset APF state
-        self._apf_b, self._apf_a = self._make_apf_coeffs()
-        self._apf_zi = np.zeros(2, dtype=np.float64)
-        # Reset RTTY state
-        self._rtty_mark_phase = 0.0
-        self._rtty_space_phase = 0.0
-        self._rtty_bit_acc = 0.0
-        self._rtty_bit_phase = 0.0
-        self._rtty_shift_reg = 0
-        self._rtty_bit_count = 0
-        self._rtty_state = "IDLE"
-        self._rtty_figs_mode = False
-        self._rtty_mark_level = 0.0
-        self._rtty_space_level = 0.0
-        self._rtty_mark_bp = None  # Rebuilt on next use
-        self._rtty_space_bp = None
-        self._rtty_mark_zi = None
-        self._rtty_space_zi = None
-        # Reset PSK31 state
-        self._psk_lo_phase = 0.0
-        self._psk_lo_freq = 2.0 * np.pi * _PSK31_CARRIER_HZ / self.audio_rate
-        self._psk_sym_phase = 0.0
-        self._psk_prev_symbol = 1.0 + 0j
-        self._psk_bit_buf = ""
-        self._psk_i_acc = 0.0
-        self._psk_q_acc = 0.0
-        self._psk_acc_count = 0
-        self._psk_lp_zi_i = np.zeros(126, dtype=np.float32)
-        self._psk_lp_zi_q = np.zeros(126, dtype=np.float32)
-        # Reset MFSK16 state
-        self._mfsk_sym_buf[:] = 0
-        self._mfsk_sym_pos = 0
-        for i in range(_MFSK16_SYMBITS):
-            if self._mfsk_intlv_bufs[i] is not None:
-                self._mfsk_intlv_bufs[i][:] = 128
-            self._mfsk_intlv_ptrs[i] = 0
-        self._mfsk_viterbi_metrics = np.full(_VITERBI_NSTATES, -(1 << 30), dtype=np.int64)
-        self._mfsk_viterbi_metrics[0] = 0
-        self._mfsk_viterbi_history = []
-        self._mfsk_soft_pair = [128, 128]
-        self._mfsk_soft_toggle = 0
-        self._mfsk_datashreg = 1
-        self._mfsk_tone_idx = -1
-        self._mfsk_tone_confidence = 0.0
-        with self._lock:
+            self._cw_current_char = []
+            self._cw_last_keyup_sample = 0
+            self._cw_dit_ms = 0.0
+            self._cw_pending_edges = []
+            # Reset APF state
+            self._apf_b, self._apf_a = self._make_apf_coeffs()
+            self._apf_zi = np.zeros(2, dtype=np.float64)
+            # Reset RTTY state
+            self._rtty_mark_phase = 0.0
+            self._rtty_space_phase = 0.0
+            self._rtty_bit_acc = 0.0
+            self._rtty_bit_phase = 0.0
+            self._rtty_shift_reg = 0
+            self._rtty_bit_count = 0
+            self._rtty_state = "IDLE"
+            self._rtty_figs_mode = False
+            self._rtty_mark_level = 0.0
+            self._rtty_space_level = 0.0
+            self._rtty_mark_bp = None  # Rebuilt on next use
+            self._rtty_space_bp = None
+            self._rtty_mark_zi = None
+            self._rtty_space_zi = None
+            # Reset PSK31 state
+            self._psk_lo_phase = 0.0
+            self._psk_lo_freq = 2.0 * np.pi * _PSK31_CARRIER_HZ / self.audio_rate
+            self._psk_sym_phase = 0.0
+            self._psk_prev_symbol = 1.0 + 0j
+            self._psk_bit_buf = ""
+            self._psk_i_acc = 0.0
+            self._psk_q_acc = 0.0
+            self._psk_acc_count = 0
+            self._psk_lp_zi_i = np.zeros(126, dtype=np.float32)
+            self._psk_lp_zi_q = np.zeros(126, dtype=np.float32)
+            # Reset MFSK16 state
+            self._mfsk_sym_buf[:] = 0
+            self._mfsk_sym_pos = 0
+            for i in range(_MFSK16_SYMBITS):
+                if self._mfsk_intlv_bufs[i] is not None:
+                    self._mfsk_intlv_bufs[i][:] = 128
+                self._mfsk_intlv_ptrs[i] = 0
+            self._mfsk_viterbi_metrics = np.full(_VITERBI_NSTATES, -(1 << 30), dtype=np.int64)
+            self._mfsk_viterbi_metrics[0] = 0
+            self._mfsk_viterbi_history = []
+            self._mfsk_soft_pair = [128, 128]
+            self._mfsk_soft_toggle = 0
+            self._mfsk_datashreg = 1
+            self._mfsk_tone_idx = -1
+            self._mfsk_tone_confidence = 0.0
             self._rtty_decoded_text = ""
             self._psk_decoded_text = ""
             self._mfsk_decoded_text = ""
-        if self._cw_taps is not None:
-            self._cw_taps, self._cw_zi_i = _make_filter(255, self.bandwidth, self.audio_rate)
-            _, self._cw_zi_q = _make_filter(255, self.bandwidth, self.audio_rate)
+            if self._cw_taps is not None:
+                self._cw_taps, self._cw_zi_i = _make_filter(255, self.bandwidth, self.audio_rate)
+                _, self._cw_zi_q = _make_filter(255, self.bandwidth, self.audio_rate)

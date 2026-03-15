@@ -7,6 +7,7 @@ import csv
 import errno
 import logging
 import os
+import select
 import stat
 import subprocess
 import time
@@ -22,6 +23,7 @@ from textual.widgets import Footer, Input, Static, OptionList
 from textual.widgets.option_list import Option
 from textual.reactive import reactive
 from textual import work
+from rich.markup import escape
 from rich.text import Text
 
 from swl_demod_tool import __version__
@@ -32,6 +34,8 @@ from swl_demod_tool.dsp import compute_spectrum_db, spectrum_to_sparkline, Demod
 from swl_demod_tool.audio import AudioOutput
 from swl_demod_tool.drm import DRMDecoder
 from swl_demod_tool.wefax import WEFAXDecoder
+
+log = logging.getLogger(__name__)
 
 SPECTRUM_AVG = 3
 FFT_SIZE = 4096
@@ -60,42 +64,62 @@ def _find_sked_csv():
     return None
 
 
+_sked_cache_path = None
+_sked_cache_mtime = None
+_sked_cache_data = None
+
+
 def _lookup_station(freq_hz):
     """Look up active station name from SWLScheduleTool schedule.
 
     Returns the station name if a broadcast is currently on-air at the
     given frequency, or empty string if none found.
     """
+    global _sked_cache_path, _sked_cache_mtime, _sked_cache_data
+
     csv_path = _find_sked_csv()
     if csv_path is None:
         return ""
+
+    # Cache CSV data keyed on path and mtime
+    try:
+        mtime = os.path.getmtime(csv_path)
+    except OSError:
+        return ""
+
+    if csv_path != _sked_cache_path or mtime != _sked_cache_mtime:
+        try:
+            with open(csv_path, "r", encoding="utf-8") as f:
+                reader = csv.reader(f, delimiter=";")
+                next(reader, None)  # skip header
+                _sked_cache_data = [row for row in reader]
+        except OSError:
+            return ""
+        _sked_cache_path = csv_path
+        _sked_cache_mtime = mtime
+
     freq_khz = str(freq_hz / 1000).rstrip("0").rstrip(".")
     now_utc = datetime.now(timezone.utc)
     current_time = int(now_utc.strftime("%H%M"))
-    try:
-        with open(csv_path, "r", encoding="utf-8") as f:
-            reader = csv.reader(f, delimiter=";")
-            next(reader, None)  # skip header
-            for row in reader:
-                if len(row) < 5 or row[0].strip() != freq_khz:
-                    continue
-                time_range = row[1] if len(row) > 1 else ""
-                if "-" not in time_range:
-                    continue
-                try:
-                    start_s, end_s = time_range.split("-")
-                    start_t, end_t = int(start_s), int(end_s)
-                except (ValueError, IndexError):
-                    continue
-                duration = end_t - start_t
-                if duration < 0:
-                    is_active = (current_time >= start_t) or (current_time < end_t)
-                else:
-                    is_active = start_t <= current_time < end_t
-                if is_active:
-                    return row[4].strip()
-    except OSError:
-        pass
+
+    for row in _sked_cache_data:
+        if len(row) < 5 or row[0].strip() != freq_khz:
+            continue
+        time_range = row[1] if len(row) > 1 else ""
+        if "-" not in time_range:
+            continue
+        try:
+            start_s, end_s = time_range.split("-")
+            start_t, end_t = int(start_s), int(end_s)
+        except (ValueError, IndexError):
+            continue
+        duration = end_t - start_t
+        if duration < 0:
+            is_active = (current_time >= start_t) or (current_time < end_t)
+        else:
+            is_active = start_t <= current_time < end_t
+        if is_active:
+            return row[4].strip()
     return ""
 
 
@@ -718,7 +742,7 @@ class DemodApp(App):
         self._last_drm_plain = ""
 
         # Guard against concurrent CAT polls
-        self._cat_polling = False
+        self._cat_polling_lock = threading.Lock()
 
         # Station name FIFO listener
         self._station_fifo_stop = threading.Event()
@@ -802,25 +826,30 @@ class DemodApp(App):
         """Daemon thread: read station names from FIFO."""
         path = STATION_FIFO
         # Create FIFO if it doesn't exist
-        if not os.path.exists(path):
-            try:
-                os.mkfifo(path)
-            except OSError:
-                return
-        elif not stat.S_ISFIFO(os.stat(path).st_mode):
+        try:
+            os.mkfifo(path)
+        except FileExistsError:
+            pass
+        except OSError:
+            return
+        if not stat.S_ISFIFO(os.lstat(path).st_mode):
             return
         while not self._station_fifo_stop.is_set():
             try:
-                # Blocking open — waits for a writer
-                with open(path, "r") as f:
-                    for line in f:
-                        if self._station_fifo_stop.is_set():
+                fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+                with os.fdopen(fd, "r") as f:
+                    while not self._station_fifo_stop.is_set():
+                        ready, _, _ = select.select([f], [], [], 1.0)
+                        if not ready:
+                            continue
+                        line = f.readline()
+                        if not line:
+                            # Writer closed; reopen to wait for next writer
                             break
                         name = line.strip()
                         if name:
                             self._fifo_station_ts = time.monotonic()
                             self.call_from_thread(setattr, self, "station_name", name)
-                # Writer closed — reopen to wait for next writer
             except OSError:
                 if self._station_fifo_stop.is_set():
                     break
@@ -925,7 +954,7 @@ class DemodApp(App):
             avail = width - len(span_str) - 2
             if len(stn) > avail:
                 stn = stn[:max(0, avail - 1)] + "…"
-            info_line = f"  [bold #f0c674]{stn}[/]{' ' * max(1, width - len(stn) - len(span_str))}{span_str}"
+            info_line = f"  [bold #f0c674]{escape(stn)}[/]{' ' * max(1, width - len(stn) - len(span_str))}{span_str}"
         else:
             info_line = f"  {' ' * max(1, width - len(span_str))}{span_str}"
 
@@ -1250,9 +1279,10 @@ class DemodApp(App):
 
     @work(thread=True)
     def _poll_cat(self):
-        if self._cat_polling or not self.sdr.has_control:
+        if not self.sdr.has_control:
             return
-        self._cat_polling = True
+        if not self._cat_polling_lock.acquire(blocking=False):
+            return
         try:
             vfo = self.sdr.get_active_vfo()
             if vfo is not None:
@@ -1278,7 +1308,7 @@ class DemodApp(App):
             if not self.sdr.has_control:
                 self.call_from_thread(self._update_conn_status)
         finally:
-            self._cat_polling = False
+            self._cat_polling_lock.release()
 
     def _apply_cat_update(self, freq):
         self.frequency_hz = freq
@@ -1374,7 +1404,7 @@ class DemodApp(App):
         try:
             self.sdr.send_demod_status(self.demod.mode, self.demod.bandwidth)
         except Exception:
-            pass
+            log.debug("Failed to send demod status", exc_info=True)
 
     def _on_mode_selected(self, value):
         if value is None:
@@ -1651,7 +1681,9 @@ class DemodApp(App):
         self.notify("Log entry saved")
 
     def _write_log_entry(self, data):
-        os.makedirs(os.path.dirname(self._log_file), exist_ok=True)
+        dir_name = os.path.dirname(self._log_file)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
         write_header = not os.path.exists(self._log_file)
         now = datetime.now(timezone.utc)
         with open(self._log_file, "a", newline="") as f:
@@ -1689,7 +1721,10 @@ class DemodApp(App):
                 self._config.add_section("state")
             self._config.set("state", "mode", self.demod.mode)
             self._config.set("state", "bandwidth", str(self.demod.bandwidth))
-            save_config(self._config)
+            try:
+                save_config(self._config)
+            except Exception:
+                log.exception("Failed to save config on exit")
         self.audio.stop()
         self.drm.stop()
         self._kill_decode_viewer()

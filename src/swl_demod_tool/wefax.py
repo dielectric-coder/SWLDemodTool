@@ -69,8 +69,8 @@ class WEFAXDecoder:
         self._temp_dir = tempfile.mkdtemp(prefix="swl_wefax_")
         log.info("WEFAX temp dir: %s", self._temp_dir)
 
-        # Image buffer (grows row by row)
-        self._image_buf = np.zeros((0, self.pixels_per_line), dtype=np.uint8)
+        # Image buffer (list of row arrays, stacked only at save/write time)
+        self._image_rows = []
         self._completed_images = []
 
         # FM discriminator state
@@ -144,7 +144,7 @@ class WEFAXDecoder:
                 self._save_image()
             self._state = "IDLE"
             self._line_count = 0
-            self._image_buf = np.zeros((0, self.pixels_per_line), dtype=np.uint8)
+            self._image_rows = []
             self._start_tone_count = 0.0
             self._stop_tone_count = 0.0
             self._line_pos = 0
@@ -198,7 +198,7 @@ class WEFAXDecoder:
                     self._save_image()
                     self._state = "IDLE"
                     self._stop_tone_count = 0.0
-                    self._image_buf = np.zeros((0, self.pixels_per_line), dtype=np.uint8)
+                    self._image_rows = []
                     self._line_count = 0
                     self._line_pos = 0
                     self._write_meta()
@@ -337,7 +337,7 @@ class WEFAXDecoder:
                              self._phasing_count)
                     self._state = "RECEIVING"
                     self._line_count = 0
-                    self._image_buf = np.zeros((0, self.pixels_per_line), dtype=np.uint8)
+                    self._image_rows = []
                     # Shift line start by phasing edge position
                     if self._phasing_edge_pos > 0:
                         self._line_pos = 0
@@ -359,10 +359,7 @@ class WEFAXDecoder:
                 pixel_line_u8 = (pixel_line * 255.0).astype(np.uint8)
 
                 # Append to image buffer
-                self._image_buf = np.vstack([
-                    self._image_buf,
-                    pixel_line_u8.reshape(1, -1)
-                ])
+                self._image_rows.append(pixel_line_u8.copy())
                 self._line_count += 1
                 self._line_pos = 0
 
@@ -376,7 +373,8 @@ class WEFAXDecoder:
             meta_path = os.path.join(self._temp_dir, "meta.json")
 
             # Write raw pixel data
-            self._image_buf.tofile(raw_path)
+            if self._image_rows:
+                np.vstack(self._image_rows).tofile(raw_path)
 
             # Write metadata
             self._write_meta()
@@ -420,7 +418,7 @@ class WEFAXDecoder:
             filename = f"wefax_{timestamp}.png"
             path = os.path.join(self.save_dir, filename)
 
-            img = Image.fromarray(self._image_buf, mode='L')
+            img = Image.fromarray(np.vstack(self._image_rows), mode='L')
             img.save(path)
             log.info("WEFAX: saved %s (%d lines)", path, self._line_count)
 

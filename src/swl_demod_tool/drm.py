@@ -395,11 +395,17 @@ class DRMDecoder:
                     proc.kill()
                 except OSError:
                     pass
+        for t in (self._reader_thread, self._stderr_thread, self._socket_thread):
+            if t is not None:
+                t.join(timeout=2)
+        self._reader_thread = None
+        self._stderr_thread = None
+        self._socket_thread = None
         self._audio_callback = None
         if self._socket_path:
             try:
                 os.unlink(self._socket_path)
-            except FileNotFoundError:
+            except OSError:
                 pass
             self._socket_path = None
         if self._socket_dir:
