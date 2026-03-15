@@ -821,15 +821,16 @@ This produces a brief dropout (click) but avoids crashing or playing stale data.
 
 ### Overflow Handling
 
-When the DSP thread writes faster than the sound card reads (e.g., during startup), the oldest samples are dropped by advancing the read pointer:
+When the DSP thread writes faster than the sound card reads (e.g., during startup), the oldest *input* samples are dropped and only the most recent samples that fit are written:
 
 ```python
 if n > available:
-    drop = n - available
-    self._read_pos = (self._read_pos + drop) % self._buf_len
+    skip = n - available
+    samples = samples[skip:]
+    n = available
 ```
 
-This is preferable to blocking the DSP thread, which would back up the entire pipeline.
+This preserves the lock-free invariant — `_read_pos` is never modified by the writer. The alternative (advancing `_read_pos` from the writer) would create a data race with the audio callback thread.
 
 ---
 

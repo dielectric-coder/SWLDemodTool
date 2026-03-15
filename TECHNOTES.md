@@ -20,7 +20,7 @@ An underrun occurs when step 3 fires but step 1 has not produced enough data. Th
 
 ### How This Project Handles It
 
-In `audio.py`, a lock-free ring buffer (single-writer/single-reader) sits between the DSP thread and the `sounddevice` output callback. When the callback finds the buffer empty, it fills the output array with zeros (silence). This is graceful degradation: silence instead of a crash, but the user hears a brief dropout.
+In `audio.py`, a lock-free ring buffer (single-writer/single-reader) sits between the DSP thread and the `sounddevice` output callback. When the callback finds the buffer empty, it fills the output array with zeros (silence). This is graceful degradation: silence instead of a crash, but the user hears a brief dropout. When the buffer is full on write, the oldest *input* samples are dropped (rather than advancing the reader position), which preserves the lock-free single-writer/single-reader invariant.
 
 ### Why a Ring Buffer Helps
 

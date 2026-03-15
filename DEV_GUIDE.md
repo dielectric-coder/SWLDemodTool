@@ -32,7 +32,7 @@ Multiple threads cooperate:
 1. **Main thread** - Textual event loop, UI rendering, timer callbacks
 2. **IQ receive thread** - Daemon thread in SDR backend (e.g. `IQClient`), reads IQ stream, calls `_on_iq_data()` callback
 3. **Audio callback thread** - Managed by sounddevice, pulls from ring buffer
-4. **Station FIFO reader thread** - Daemon thread, blocks on `$XDG_RUNTIME_DIR/swldemod-station.fifo` waiting for station names from external tools (e.g. SWLScheduleTool). Updates `station_name` reactive via `call_from_thread()`.
+4. **Station FIFO reader thread** - Daemon thread, opens `$XDG_RUNTIME_DIR/swldemod-station.fifo` with `O_NONBLOCK` and polls via `select.select()` (1-second timeout) for station names from external tools. Updates `station_name` reactive via `call_from_thread()`. The non-blocking open and select loop allows clean shutdown when the stop event is set.
 5. **DRM audio reader thread** (DRM mode only) - Reads decoded int16 audio from Dream's stdout
 6. **DRM status socket thread** (DRM mode only) - Reads JSON status from Dream's Unix domain socket
 7. **DRM stderr drain thread** (DRM mode only) - Drains stderr to prevent pipe blocking
@@ -57,10 +57,10 @@ UI updates from background threads are marshalled via `call_from_thread()`.
 
 ### Thread Safety
 
-- **Audio ring buffer** is lock-free (single-writer from IQ/DRM thread, single-reader from sounddevice callback). One slot is reserved to distinguish full from empty.
-- **`Demodulator._lock`** protects state shared between UI and IQ threads: `agc_enabled`, `volume`, `muted`, CW text/timing/WPM. Access these via the thread-safe properties and `get_*`/`clear_*` methods.
-- **`DRMDecoder._lock`** protects `self._process` (preventing race between `write_iq` and `stop`) and `self.status` dict.
-- **`_cat_polling` flag** in `DemodApp` prevents concurrent `_poll_cat` worker threads from accumulating when the CAT server is slow.
+- **Audio ring buffer** is lock-free (single-writer from IQ/DRM thread, single-reader from sounddevice callback). One slot is reserved to distinguish full from empty. On overflow, the writer drops oldest *input* samples rather than advancing the reader position, preserving the single-writer/single-reader invariant.
+- **`Demodulator._lock`** protects state shared between UI and IQ threads: `agc_enabled`, `volume`, `muted`, `bandwidth`, filter state, CW text/timing/WPM, SNR, BFO offset, PLL offset, RTTY levels, MFSK tone, WEFAX raw data. All UI-thread getters (`get_snr_db`, `bfo_offset`, `get_cw_*`, `get_rtty_levels`, `get_mfsk_tone`, `get_pll_offset_hz`, `get_wefax_raw`) and mutators (`set_bandwidth`, `reset`) acquire the lock. Access these via the thread-safe properties and `get_*`/`clear_*` methods.
+- **`DRMDecoder._lock`** protects `self._process` (preventing race between `write_iq` and `stop`) and `self.status` dict. `stop()` joins all reader threads with a 2-second timeout.
+- **`_cat_polling_lock`** (`threading.Lock`) in `DemodApp` prevents concurrent `_poll_cat` worker threads using `acquire(blocking=False)`.
 
 ### SDR Backend Architecture
 

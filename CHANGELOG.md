@@ -11,6 +11,32 @@
 - **Noise blanker max-blank safety**: Added `_NB_MAX_BLANK = 64` consecutive-sample limit. If the blanker stays in blanking mode for 64+ consecutive samples (not impulse noise), it force-resets the EMA average and resumes normal output. Prevents the NB from muting the signal on strong continuous interference that is not impulse-shaped.
 - Mode cycle updated: AM → SAM → SAM-U → SAM-L → USB → LSB → CW+ → CW- → RTTY+ → RTTY- → PSK31 → MFSK16 → WEFAX → DRM.
 
+### Fixed
+- **Thread safety: `set_bandwidth()` / `reset()` crash**: These methods mutated filter taps and zi arrays without holding `Demodulator._lock`, racing with the IQ thread's `process()` call. Now wrapped in the lock.
+- **Thread safety: audio ring buffer invariant violation**: `write()` modified `_read_pos` on overflow, breaking the single-writer/single-reader contract. Now drops oldest input samples instead of advancing the reader position.
+- **Thread safety: CAT polling race**: `_cat_polling` check-then-set allowed concurrent poll workers. Replaced with `threading.Lock.acquire(blocking=False)`.
+- **Thread safety: unprotected UI-thread getters**: `get_snr_db()`, `bfo_offset`, `get_rtty_levels()`, `get_mfsk_tone()`, `get_cw_*()`, `get_pll_offset_hz()` now acquire `_lock`.
+- **Thread safety: `get_wefax_raw` data loss**: Read-and-clear was non-atomic; now wrapped in `_lock`.
+- **Security: FIFO TOCTOU race**: Replaced `os.path.exists()` + `os.mkfifo()` with `try`/`FileExistsError` + `os.lstat()` (no symlink following).
+- **Security: Rich markup injection from FIFO**: Station names now escaped via `rich.markup.escape()` before display.
+- **Security: non-atomic config write**: Config now writes to a `.tmp` file then `os.replace()`, preventing corruption on crash.
+- **Security: IQ header validation**: Zero `sample_rate` from server now rejected (prevents division-by-zero downstream).
+- **Robustness: FIFO blocks shutdown**: FIFO now opened with `O_NONBLOCK` + `select.select()` with 1-second timeout for clean thread exit.
+- **Robustness: socket leaks on reconnect**: Both `IQClient` and `CATClient` now close existing sockets before creating new ones.
+- **Robustness: IQ receive thread blocks forever**: Added 10-second socket timeout after connect.
+- **Robustness: double `start_streaming`**: Guard prevents spawning duplicate IQ receive threads.
+- **Robustness: DRM thread cleanup**: `stop()` now joins reader/stderr/socket threads with timeout and catches `OSError` on socket unlink.
+- **Robustness: `save_config` failure skips cleanup**: Wrapped in `try`/`except` in `on_unmount` so audio/DRM/SDR cleanup always runs.
+- **Robustness: `makedirs("")` crash**: Guarded against bare filename with no directory in log file path.
+- **Performance: auto-notch vectorized**: Replaced per-bin Python loop (~47K numpy calls/sec) with `sliding_window_view` + vectorized median.
+- **Performance: direct power computation**: Replaced `np.abs()**2` (unnecessary sqrt+square) with `x.real**2 + x.imag**2` at 5 FFT sites.
+- **Performance: cached Hanning window**: SNR measurement and CW tone analysis now reuse cached windows.
+- **Performance: WEFAX O(n²) image assembly**: Replaced `np.vstack` per scan line with list of rows, stacked once at save.
+- **Misc: schedule CSV caching**: `_lookup_station` now caches parsed CSV data by file mtime.
+- **Misc: `assert` → `raise ValueError`**: Sample rate divisibility check no longer disabled under `python -O`.
+- **Misc: `_send_demod_status`**: Logs errors at debug level instead of silently swallowing.
+- **Misc: `decode_viewer.py`**: File handle now uses `with` statement.
+
 ### Removed
 - **Spectrum toggle keybinding** (`d`): The `toggle_spectrum` action and its default keybinding have been removed.
 
