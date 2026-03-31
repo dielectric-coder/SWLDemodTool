@@ -1,6 +1,7 @@
 """TCP client for receiving IQ samples from Elad Spectrum IQ server."""
 
 import logging
+import queue
 import socket
 import struct
 import threading
@@ -11,6 +12,12 @@ log = logging.getLogger(__name__)
 HEADER_SIZE = 16
 HEADER_MAGIC = b"ELAD"
 
+# Receive buffer: 4 MB absorbs ~2.7s at 1.5 MB/s (192 kHz IQ)
+_SO_RCVBUF = 4 * 1024 * 1024
+
+# Max queued chunks before dropping (bounds memory usage)
+_QUEUE_MAX = 256  # ~16s of data at 12288 B/chunk
+
 
 class IQClient:
     def __init__(self, host="localhost", port=4533):
@@ -20,10 +27,12 @@ class IQClient:
         self.connected = False
         self.sample_rate = 0
         self.format_bits = 0
-        self._thread = None
+        self._recv_thread = None
+        self._proc_thread = None
         self._running = False
         self._callback = None
         self._lock = threading.Lock()
+        self._queue = queue.Queue(maxsize=_QUEUE_MAX)
 
     def connect(self):
         """Connect to IQ server and read header."""
@@ -34,6 +43,7 @@ class IQClient:
                 pass
         try:
             self.sock = socket.create_connection((self.host, self.port), timeout=5)
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, _SO_RCVBUF)
             self.sock.settimeout(10.0)
             # Read 16-byte header
             header = self._recv_exact(HEADER_SIZE)
@@ -55,8 +65,15 @@ class IQClient:
 
     def disconnect(self):
         self._running = False
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=2)
+        if self._recv_thread and self._recv_thread.is_alive():
+            self._recv_thread.join(timeout=2)
+        if self._proc_thread and self._proc_thread.is_alive():
+            # Unblock process loop waiting on queue
+            try:
+                self._queue.put_nowait(None)
+            except queue.Full:
+                pass
+            self._proc_thread.join(timeout=2)
         with self._lock:
             if self.sock:
                 try:
@@ -68,32 +85,65 @@ class IQClient:
             self.connected = False
 
     def start_streaming(self, callback):
-        """Start receiving IQ data in a background thread.
+        """Start receiving IQ data in background threads.
 
         callback(iq_array): called with numpy complex64 array of IQ samples.
+        Receive and processing run on separate threads so DSP never stalls
+        the socket, preventing TCP backpressure disconnects.
         """
         if not self.connected:
             return
-        if self._thread is not None and self._thread.is_alive():
+        if self._recv_thread is not None and self._recv_thread.is_alive():
             return
         self._callback = callback
         self._running = True
-        self._thread = threading.Thread(target=self._receive_loop, daemon=True)
-        self._thread.start()
+        # Clear any stale data
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+        self._recv_thread = threading.Thread(target=self._receive_loop, daemon=True)
+        self._proc_thread = threading.Thread(target=self._process_loop, daemon=True)
+        self._recv_thread.start()
+        self._proc_thread.start()
 
     def _receive_loop(self):
-        # Read in chunks matching the USB buffer: 12288 bytes = 1536 IQ pairs
+        """Read IQ chunks from socket and enqueue; never blocks on DSP."""
         chunk_size = 12288
         while self._running:
             data = self._recv_exact(chunk_size)
             if data is None:
                 self.connected = False
                 break
+            try:
+                self._queue.put_nowait(data)
+            except queue.Full:
+                # Processing can't keep up — drop oldest chunk
+                try:
+                    self._queue.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    self._queue.put_nowait(data)
+                except queue.Full:
+                    pass
+        # Signal processing thread to stop
+        self._queue.put(None)
+
+    def _process_loop(self):
+        """Dequeue IQ chunks and invoke callback (DSP runs here)."""
+        scale = np.float32(1.0 / 2147483648.0)  # 1 / 2^31
+        while self._running:
+            try:
+                data = self._queue.get(timeout=1.0)
+            except queue.Empty:
+                continue
+            if data is None:
+                break
             if self._callback:
-                # Convert 32-bit signed int IQ pairs to normalized complex64
                 samples = np.frombuffer(data, dtype=np.int32)
                 n_pairs = len(samples) // 2
-                scale = np.float32(1.0 / 2147483648.0)  # 1 / 2^31
                 i_samples = samples[0::2].astype(np.float32) * scale
                 q_samples = samples[1::2].astype(np.float32) * scale
                 iq = i_samples + 1j * q_samples
