@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.5.7] - 2026-03-31
+
+### Fixed
+- **Mode selector clipped in short terminals**: Selector list now uses flexible height (`1fr`) instead of `auto` with `max-height`, so all modes (including DRM at the bottom) are accessible regardless of terminal height.
+
 ## [0.5.6] - 2026-03-15
 
 ### Added

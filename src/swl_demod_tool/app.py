@@ -431,8 +431,7 @@ SELECTOR_CSS = """
 
 #selector-list {
     width: 100%;
-    height: auto;
-    max-height: 20;
+    height: 1fr;
     background: #1a1a2e;
     color: #a9b1d6;
     border: none;
