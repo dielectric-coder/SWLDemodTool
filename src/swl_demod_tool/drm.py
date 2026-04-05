@@ -164,6 +164,7 @@ class DRMDecoder:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            start_new_session=True,
         )
 
         self._reader_thread = threading.Thread(

@@ -27,8 +27,13 @@ from rich.markup import escape
 from rich.text import Text
 
 from swl_demod_tool import __version__
-from swl_demod_tool.config import (load_config, save_config, load_keybindings,
-                                    keybindings_to_textual, _to_display_key)
+from swl_demod_tool.config import (
+    load_config,
+    save_config,
+    load_keybindings,
+    keybindings_to_textual,
+    _to_display_key,
+)
 from swl_demod_tool.sdr import create_sdr_source, DEFAULT_BACKEND
 from swl_demod_tool.dsp import compute_spectrum_db, spectrum_to_sparkline, Demodulator
 from swl_demod_tool.audio import AudioOutput
@@ -46,12 +51,22 @@ STATION_FIFO = os.path.join(
 
 # SWLScheduleTool schedule CSV search paths
 _SKED_CSV_CANDIDATES = [
-    os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                 "..", "..", "..", "SWLScheduleTool", "src",
-                 "eibi_swl", "swl-schedules-data", "sked-current.csv"),
-    os.path.join(os.environ.get("XDG_DATA_HOME",
-                 os.path.expanduser("~/.local/share")),
-                 "eibi-swl", "sked-current.csv"),
+    os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "..",
+        "..",
+        "..",
+        "SWLScheduleTool",
+        "src",
+        "eibi_swl",
+        "swl-schedules-data",
+        "sked-current.csv",
+    ),
+    os.path.join(
+        os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share")),
+        "eibi-swl",
+        "sked-current.csv",
+    ),
 ]
 
 
@@ -66,7 +81,7 @@ def _find_sked_csv():
 
 _sked_cache_path = None
 _sked_cache_mtime = None
-_sked_cache_data = None
+_sked_cache_data = []
 
 
 def _lookup_station(freq_hz):
@@ -263,36 +278,36 @@ HELP_CSS = """
 # Keybinding metadata: action -> (description, section, status_bar_label or None)
 # Paired actions (down/up) share a single help entry via _PAIRED_ACTIONS.
 KEYBINDING_META = {
-    "quit":              ("Quit",                        "General",         "Quit"),
-    "unfocus":           ("Unfocus / Close popup",       "General",         None),
-    "show_help":         ("Show keyboard shortcuts",     "General",         "Help"),
-    "connect":           ("Connect to server",           "Connection",      "Connect"),
-    "disconnect":        ("Disconnect",                  "Connection",      "Disc"),
-    "reconnect":         ("Reconnect",                   "Connection",      "Recon"),
-    "toggle_mute":       ("Toggle mute",                 "Audio & Mode",    "Mute"),
-    "toggle_agc":        ("Toggle AGC",                  "Audio & Mode",    "AGC"),
-    "volume_up":         ("AF gain up",                  "Audio & Mode",    None),
-    "volume_down":       ("AF gain down",                "Audio & Mode",    None),
-    "select_bw":         ("Select bandwidth",            "Audio & Mode",    "BW"),
-    "bw_up":             ("Bandwidth up",                "Audio & Mode",    None),
-    "bw_down":           ("Bandwidth down",              "Audio & Mode",    None),
-    "zoom_in":           ("Zoom in",                     "Display",         None),
-    "zoom_out":          ("Zoom out",                    "Display",         None),
-    "tune_up":           ("Tune up",                     "Tuning",          None),
-    "tune_down":         ("Tune down",                   "Tuning",          None),
-    "focus_freq":        ("Direct frequency entry (kHz)","Tuning",          "Freq"),
-    "select_mode":       ("Select demod mode",           "Audio & Mode",    "Mode"),
-    "select_tune_step":  ("Select tune step",            "Tuning",          "Step"),
-    "rit_up":            ("RIT offset up",               "Tuning",          None),
-    "rit_down":          ("RIT offset down",             "Tuning",          None),
-    "select_rit_step":   ("Cycle RIT step 1/10/100 Hz",  "Tuning",          "RIT"),
-    "select_vfo":        ("Select VFO",                  "Tuning",          "VFO"),
-    "clear_cw_text":     ("Clear decoded text",           "Audio & Mode",    None),
-    "toggle_nb":         ("Cycle NB Off/Low/Med/High",   "Noise Reduction", "NB"),
-    "cycle_dnr":         ("Cycle DNR level (Off/1/2/3)", "Noise Reduction", "DNR"),
-    "toggle_auto_notch": ("Toggle DNF (auto notch)",     "Noise Reduction", "DNF"),
-    "toggle_apf":        ("Toggle CW audio peak filter", "Noise Reduction", "APF"),
-    "log_entry":         ("Create SWL log entry",        "Logging",         "Log"),
+    "quit": ("Quit", "General", "Quit"),
+    "unfocus": ("Unfocus / Close popup", "General", None),
+    "show_help": ("Show keyboard shortcuts", "General", "Help"),
+    "connect": ("Connect to server", "Connection", "Connect"),
+    "disconnect": ("Disconnect", "Connection", "Disc"),
+    "reconnect": ("Reconnect", "Connection", "Recon"),
+    "toggle_mute": ("Toggle mute", "Audio & Mode", "Mute"),
+    "toggle_agc": ("Toggle AGC", "Audio & Mode", "AGC"),
+    "volume_up": ("AF gain up", "Audio & Mode", None),
+    "volume_down": ("AF gain down", "Audio & Mode", None),
+    "select_bw": ("Select bandwidth", "Audio & Mode", "BW"),
+    "bw_up": ("Bandwidth up", "Audio & Mode", None),
+    "bw_down": ("Bandwidth down", "Audio & Mode", None),
+    "zoom_in": ("Zoom in", "Display", None),
+    "zoom_out": ("Zoom out", "Display", None),
+    "tune_up": ("Tune up", "Tuning", None),
+    "tune_down": ("Tune down", "Tuning", None),
+    "focus_freq": ("Direct frequency entry (kHz)", "Tuning", "Freq"),
+    "select_mode": ("Select demod mode", "Audio & Mode", "Mode"),
+    "select_tune_step": ("Select tune step", "Tuning", "Step"),
+    "rit_up": ("RIT offset up", "Tuning", None),
+    "rit_down": ("RIT offset down", "Tuning", None),
+    "select_rit_step": ("Cycle RIT step 1/10/100 Hz", "Tuning", "RIT"),
+    "select_vfo": ("Select VFO", "Tuning", "VFO"),
+    "clear_cw_text": ("Clear decoded text", "Audio & Mode", None),
+    "toggle_nb": ("Cycle NB Off/Low/Med/High", "Noise Reduction", "NB"),
+    "cycle_dnr": ("Cycle DNR level (Off/1/2/3)", "Noise Reduction", "DNR"),
+    "toggle_auto_notch": ("Toggle DNF (auto notch)", "Noise Reduction", "DNF"),
+    "toggle_apf": ("Toggle CW audio peak filter", "Noise Reduction", "APF"),
+    "log_entry": ("Create SWL log entry", "Logging", "Log"),
 }
 
 # Pairs of (down_action, up_action) shown as a single "key1 / key2" help entry
@@ -306,8 +321,13 @@ _PAIRED_ACTIONS = [
 
 # Section display order
 _SECTION_ORDER = [
-    "General", "Connection", "Tuning", "Audio & Mode", "Display",
-    "Noise Reduction", "Logging",
+    "General",
+    "Connection",
+    "Tuning",
+    "Audio & Mode",
+    "Display",
+    "Noise Reduction",
+    "Logging",
 ]
 
 
@@ -374,6 +394,7 @@ class HelpScreen(ModalScreen):
 
     def on_mount(self):
         from swl_demod_tool.config import _to_textual_key
+
         help_tkey = _to_textual_key(self._help_key)
         if help_tkey != "escape":
             self._bindings.bind(help_tkey, "dismiss", description="Close")
@@ -482,7 +503,10 @@ class SelectorScreen(ModalScreen):
                 yield Static(self._title, id="selector-title")
                 yield OptionList(*options, id="selector-list")
 
-                yield Static("\u2191\u2193: navigate \u00b7 Enter: select \u00b7 Esc: cancel", id="selector-hint")
+                yield Static(
+                    "\u2191\u2193: navigate \u00b7 Enter: select \u00b7 Esc: cancel",
+                    id="selector-hint",
+                )
 
     def on_mount(self):
         ol = self.query_one("#selector-list", OptionList)
@@ -602,7 +626,9 @@ class LogEntryScreen(ModalScreen):
                     yield Input(placeholder="e.g. 45444", id="log-sinpo")
                     yield Static("Remarks:", classes="log-label")
                     yield Input(placeholder="Free text", id="log-remarks")
-                yield Static("Tab: next \u00b7 Enter: save \u00b7 Esc: cancel", id="log-hint")
+                yield Static(
+                    "Tab: next \u00b7 Enter: save \u00b7 Esc: cancel", id="log-hint"
+                )
 
     def on_mount(self):
         self.query_one("#log-sinpo", Input).focus()
@@ -687,7 +713,9 @@ class DemodApp(App):
     tune_step = reactive(1000)  # Fine tune step in Hz
     station_name = reactive("")  # Station name from external scheduler
 
-    def __init__(self, sdr_source, audio_device="default", keybindings=None, config=None):
+    def __init__(
+        self, sdr_source, audio_device="default", keybindings=None, config=None
+    ):
         self._keybindings = keybindings or {}
         self._config = config
         self._shortcut_table = _build_shortcut_table(self._keybindings)
@@ -700,8 +728,12 @@ class DemodApp(App):
 
         # Demodulation and audio — restore saved mode/bandwidth
         saved_mode = config.get("state", "mode", fallback="AM") if config else "AM"
-        saved_bw = config.getint("state", "bandwidth", fallback=5000) if config else 5000
-        self.demod = Demodulator(iq_sample_rate=192000, audio_rate=48000, bandwidth=saved_bw)
+        saved_bw = (
+            config.getint("state", "bandwidth", fallback=5000) if config else 5000
+        )
+        self.demod = Demodulator(
+            iq_sample_rate=192000, audio_rate=48000, bandwidth=saved_bw
+        )
         self.demod.mode = saved_mode
         self.demod.reset()
         self.audio = AudioOutput(sample_rate=48000, block_size=1024)
@@ -710,17 +742,32 @@ class DemodApp(App):
         # WEFAX decoder
         wefax_ioc = config.getint("wefax", "ioc", fallback=576) if config else 576
         wefax_rpm = config.getint("wefax", "rpm", fallback=120) if config else 120
-        wefax_auto = config.getboolean("wefax", "auto_save", fallback=True) if config else True
-        wefax_dir = config.get("wefax", "save_dir", fallback="~/Pictures/fax") if config else "~/Pictures/fax"
+        wefax_auto = (
+            config.getboolean("wefax", "auto_save", fallback=True) if config else True
+        )
+        wefax_dir = (
+            config.get("wefax", "save_dir", fallback="~/Pictures/fax")
+            if config
+            else "~/Pictures/fax"
+        )
         self.wefax = WEFAXDecoder(
-            sample_rate=48000, ioc=wefax_ioc, rpm=wefax_rpm,
-            save_dir=wefax_dir, auto_save=wefax_auto)
+            sample_rate=48000,
+            ioc=wefax_ioc,
+            rpm=wefax_rpm,
+            save_dir=wefax_dir,
+            auto_save=wefax_auto,
+        )
         self._decode_viewer_proc = None
 
         # SWL logging
         self._log_file = os.path.expanduser(
-            config.get("logging", "log_file", fallback="~/Documents/swl-log.csv") if config else "~/Documents/swl-log.csv")
-        self._log_listener = config.get("logging", "listener", fallback="") if config else ""
+            config.get("logging", "log_file", fallback="~/Documents/swl-log.csv")
+            if config
+            else "~/Documents/swl-log.csv"
+        )
+        self._log_listener = (
+            config.get("logging", "listener", fallback="") if config else ""
+        )
 
         # Audio level tracking
         self._audio_level_db = -120.0
@@ -772,6 +819,7 @@ class DemodApp(App):
     def _apply_keybinding_overrides(self):
         """Rebind any keys that differ from class-level defaults."""
         from swl_demod_tool.config import DEFAULT_KEYS, _to_textual_key
+
         for action, configured_key in self._keybindings.items():
             default_key = DEFAULT_KEYS.get(action)
             if default_key is None or configured_key == default_key:
@@ -800,7 +848,8 @@ class DemodApp(App):
         self.set_interval(0.1, self._update_displays)
         # Start station name FIFO listener
         self._station_fifo_thread = threading.Thread(
-            target=self._station_fifo_reader, daemon=True)
+            target=self._station_fifo_reader, daemon=True
+        )
         self._station_fifo_thread.start()
         # Auto-connect on start
         self.action_connect()
@@ -876,10 +925,10 @@ class DemodApp(App):
         cat_detail = ""
         if self.sdr.info:
             sdr_label = self.sdr.info.label
-            host = getattr(self.sdr, 'host', '')
+            host = getattr(self.sdr, "host", "")
             iq_detail = f"  {host}:{getattr(self.sdr, 'iq_port', '')}  {self.sdr.info.sample_rate} Hz  {self.sdr.info.sample_bits}-bit IQ"
         if self.sdr.has_control:
-            host = getattr(self.sdr, 'host', '')
+            host = getattr(self.sdr, "host", "")
             cat_detail = f" {sdr_label}  {host}:{getattr(self.sdr, 'cat_port', '')}"
 
         text = (
@@ -916,7 +965,7 @@ class DemodApp(App):
         n = len(avg)
         visible = max(4, int(n * self._spectrum_zoom))
         start = (n - visible) // 2
-        zoomed = avg[start:start + visible]
+        zoomed = avg[start : start + visible]
 
         try:
             width = self.size.width - 6
@@ -924,7 +973,9 @@ class DemodApp(App):
             width = 60
         width = max(20, min(width, 200))
 
-        graph = spectrum_to_sparkline(zoomed, width=width, height=9, min_db=-120.0, max_db=-20.0)
+        graph = spectrum_to_sparkline(
+            zoomed, width=width, height=9, min_db=-120.0, max_db=-20.0
+        )
 
         # Indent each row
         indented = "\n".join("  " + row for row in graph.split("\n"))
@@ -932,7 +983,11 @@ class DemodApp(App):
         center = width // 2
 
         # Bandwidth underline centered on the marker
-        sample_rate = self.sdr.info.sample_rate if self.sdr.info and self.sdr.info.sample_rate > 0 else 192000
+        sample_rate = (
+            self.sdr.info.sample_rate
+            if self.sdr.info and self.sdr.info.sample_rate > 0
+            else 192000
+        )
         span_hz = sample_rate * self._spectrum_zoom
         bw = self.demod.bandwidth if self.demod.mode != "DRM" else 10000
         bw_half = max(1, int(bw / span_hz * width) // 2)
@@ -952,16 +1007,12 @@ class DemodApp(App):
         if stn:
             avail = width - len(span_str) - 2
             if len(stn) > avail:
-                stn = stn[:max(0, avail - 1)] + "…"
+                stn = stn[: max(0, avail - 1)] + "…"
             info_line = f"  [bold #f0c674]{escape(stn)}[/]{' ' * max(1, width - len(stn) - len(span_str))}{span_str}"
         else:
             info_line = f"  {' ' * max(1, width - len(span_str))}{span_str}"
 
-        w.update(
-            f"{indented}\n"
-            f"  {bw_line}\n"
-            f"{info_line}"
-        )
+        w.update(f"{indented}\n  {bw_line}\n{info_line}")
 
     def _cw_tuning_bar(self, width=21):
         """Build a center-zero tuning indicator for CW mode."""
@@ -985,13 +1036,15 @@ class DemodApp(App):
         norm = max(-1.0, min(1.0, deviation / max_dev))
         pos = center + int(norm * center)
         pos = max(0, min(width - 1, pos))
-        bar[pos] = "█"     # actual peak position
+        bar[pos] = "█"  # actual peak position
         snr = self.demod.get_cw_snr_db()
         sign = "+" if deviation >= 0 else "-"
         abs_dev = abs(deviation)
         tune_str = f"{sign}{abs_dev:6.1f}"
         snr_str = f"{snr:2.0f}"
-        return f"   Tune: [{''.join(bar)}] {tune_str} Hz    SNR: {snr_str} dB    {wpm_str}"
+        return (
+            f"   Tune: [{''.join(bar)}] {tune_str} Hz    SNR: {snr_str} dB    {wpm_str}"
+        )
 
     def _update_audio_info(self):
         w = self.query_one("#audio-info", Static)
@@ -1032,7 +1085,11 @@ class DemodApp(App):
         s_bar = "█" * s_filled + "░" * (13 - s_filled)
 
         # Noise reduction status
-        nb_str = f" NB: ON ({self.demod.nb_threshold_name})" if self.demod.nb_enabled else " NB: OFF"
+        nb_str = (
+            f" NB: ON ({self.demod.nb_threshold_name})"
+            if self.demod.nb_enabled
+            else " NB: OFF"
+        )
         dnr_lvl = self.demod.dnr_level
         dnr_str = f"DNR: {dnr_lvl}" if dnr_lvl > 0 else "DNR: OFF"
         an_str = "DNF: ON" if self.demod.auto_notch else "DNF: OFF"
@@ -1099,7 +1156,9 @@ class DemodApp(App):
         elif mode in ("RTTY+", "RTTY-"):
             rtty_text = self.demod.get_rtty_text()
             polarity = "normal" if mode == "RTTY+" else "reverse"
-            t = Text(f"   {mode} 45.45 Bd / 170 Hz shift ({polarity})    {self._rtty_tuning_bar()}    {self._snr_str()}")
+            t = Text(
+                f"   {mode} 45.45 Bd / 170 Hz shift ({polarity})    {self._rtty_tuning_bar()}    {self._snr_str()}"
+            )
             if rtty_text:
                 t.append(f"\n   {rtty_text}")
             w.update(t)
@@ -1114,7 +1173,9 @@ class DemodApp(App):
             tone, conf = self.demod.get_mfsk_tone()
             tone_str = f"T:{tone:2d}" if tone >= 0 else "T:--"
             conf_str = f"{conf * 100:2.0f}%" if tone >= 0 else "--%"
-            t = Text(f"   MFSK16 15.625 Bd / 16 tones / 250 Hz    {tone_str} {conf_str}    {self._snr_str()}")
+            t = Text(
+                f"   MFSK16 15.625 Bd / 16 tones / 250 Hz    {tone_str} {conf_str}    {self._snr_str()}"
+            )
             if mfsk_text:
                 t.append(f"\n   {mfsk_text}")
             w.update(t)
@@ -1215,7 +1276,7 @@ class DemodApp(App):
             audio = self.demod.process(iq_samples)
             if len(audio) > 0:
                 # Track audio level
-                rms = np.sqrt(np.mean(audio ** 2)) if not self.demod.muted else 0.0
+                rms = np.sqrt(np.mean(audio**2)) if not self.demod.muted else 0.0
                 level_db = 20.0 * np.log10(max(rms, 1e-10))
                 with self._audio_level_lock:
                     self._audio_level_db = level_db
@@ -1240,15 +1301,25 @@ class DemodApp(App):
         self._kill_decode_viewer()
         try:
             import sys
+
             self._decode_viewer_proc = subprocess.Popen(
-                [sys.executable, "-m", "swl_demod_tool.decode_viewer",
-                 "--mode", "wefax", "--data-dir", self.wefax.get_temp_dir()],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                [
+                    sys.executable,
+                    "-m",
+                    "swl_demod_tool.decode_viewer",
+                    "--mode",
+                    "wefax",
+                    "--data-dir",
+                    self.wefax.get_temp_dir(),
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
             logging.getLogger(__name__).info(
-                "Launched decode viewer (PID %d)", self._decode_viewer_proc.pid)
+                "Launched decode viewer (PID %d)", self._decode_viewer_proc.pid
+            )
         except Exception as e:
-            logging.getLogger(__name__).warning(
-                "Failed to launch decode viewer: %s", e)
+            logging.getLogger(__name__).warning("Failed to launch decode viewer: %s", e)
             self._decode_viewer_proc = None
 
     def _kill_decode_viewer(self):
@@ -1296,8 +1367,7 @@ class DemodApp(App):
                     if time.monotonic() - self._fifo_station_ts > 2.0:
                         name = _lookup_station(freq)
                         if name:
-                            self.call_from_thread(
-                                setattr, self, "station_name", name)
+                            self.call_from_thread(setattr, self, "station_name", name)
             sm = self.sdr.get_s_meter()
             if sm is not None:
                 with self._s_lock:
@@ -1356,7 +1426,8 @@ class DemodApp(App):
         self.audio.stop()
         self.drm.stop()
         self.demod.reset()
-        self._spectrum_buf.clear()
+        with self._iq_lock:
+            self._spectrum_buf.clear()
         self._update_conn_status()
         self._update_radio_info()
 
@@ -1372,23 +1443,54 @@ class DemodApp(App):
         self.demod.agc_enabled = not self.demod.agc_enabled
         self._update_audio_info()
 
-    _MODE_LIST = ["AM", "SAM", "SAM-U", "SAM-L", "USB", "LSB", "CW+", "CW-",
-                   "RTTY+", "RTTY-", "PSK31", "MFSK16", "WEFAX", "DRM"]
+    _MODE_LIST = [
+        "AM",
+        "SAM",
+        "SAM-U",
+        "SAM-L",
+        "USB",
+        "LSB",
+        "CW+",
+        "CW-",
+        "RTTY+",
+        "RTTY-",
+        "PSK31",
+        "MFSK16",
+        "WEFAX",
+        "DRM",
+    ]
     _MODE_HINTS = {
-        "AM": "Amplitude modulation", "SAM": "Synchronous AM",
-        "SAM-U": "Sync AM upper", "SAM-L": "Sync AM lower",
-        "USB": "Upper sideband", "LSB": "Lower sideband",
-        "CW+": "CW upper beat", "CW-": "CW lower beat",
-        "RTTY+": "RTTY normal", "RTTY-": "RTTY inverted",
-        "PSK31": "31.25 baud BPSK", "MFSK16": "16-tone FSK + FEC",
+        "AM": "Amplitude modulation",
+        "SAM": "Synchronous AM",
+        "SAM-U": "Sync AM upper",
+        "SAM-L": "Sync AM lower",
+        "USB": "Upper sideband",
+        "LSB": "Lower sideband",
+        "CW+": "CW upper beat",
+        "CW-": "CW lower beat",
+        "RTTY+": "RTTY normal",
+        "RTTY-": "RTTY inverted",
+        "PSK31": "31.25 baud BPSK",
+        "MFSK16": "16-tone FSK + FEC",
         "WEFAX": "Weather Fax",
         "DRM": "Digital Radio Mondiale",
     }
     _BW_PRESETS = [100, 250, 500, 1200, 2400, 3200, 5000, 10000]
-    _MODE_DEFAULT_BW = {"AM": 5000, "SAM": 5000, "SAM-U": 5000, "SAM-L": 5000,
-                        "USB": 2400, "LSB": 2400, "CW+": 500, "CW-": 500,
-                        "RTTY+": 2400, "RTTY-": 2400, "PSK31": 500, "MFSK16": 500,
-                        "WEFAX": 2800}
+    _MODE_DEFAULT_BW = {
+        "AM": 5000,
+        "SAM": 5000,
+        "SAM-U": 5000,
+        "SAM-L": 5000,
+        "USB": 2400,
+        "LSB": 2400,
+        "CW+": 500,
+        "CW-": 500,
+        "RTTY+": 2400,
+        "RTTY-": 2400,
+        "PSK31": 500,
+        "MFSK16": 500,
+        "WEFAX": 2800,
+    }
 
     def action_select_mode(self):
         """Show mode selector popup."""
@@ -1664,8 +1766,10 @@ class DemodApp(App):
                 station=self.station_name,
                 freq_khz=f"{freq_khz:.3f}",
                 mode=self.demod.mode,
-                bw=str(self.demod.bandwidth)),
-            callback=self._on_log_entry)
+                bw=str(self.demod.bandwidth),
+            ),
+            callback=self._on_log_entry,
+        )
 
     def _on_log_entry(self, data):
         if data is None:
@@ -1688,19 +1792,32 @@ class DemodApp(App):
         with open(self._log_file, "a", newline="") as f:
             writer = csv.writer(f)
             if write_header:
-                writer.writerow(["date", "time_utc", "listener", "station",
-                                 "frequency_khz", "mode", "bandwidth", "sinpo", "remarks"])
-            writer.writerow([
-                now.strftime("%Y-%m-%d"),
-                now.strftime("%H:%M"),
-                data.get("listener", ""),
-                data.get("station", ""),
-                data.get("freq_khz", ""),
-                data.get("mode", ""),
-                data.get("bw", ""),
-                data.get("sinpo", ""),
-                data.get("remarks", ""),
-            ])
+                writer.writerow(
+                    [
+                        "date",
+                        "time_utc",
+                        "listener",
+                        "station",
+                        "frequency_khz",
+                        "mode",
+                        "bandwidth",
+                        "sinpo",
+                        "remarks",
+                    ]
+                )
+            writer.writerow(
+                [
+                    now.strftime("%Y-%m-%d"),
+                    now.strftime("%H:%M"),
+                    data.get("listener", ""),
+                    data.get("station", ""),
+                    data.get("freq_khz", ""),
+                    data.get("mode", ""),
+                    data.get("bw", ""),
+                    data.get("sinpo", ""),
+                    data.get("remarks", ""),
+                ]
+            )
 
     def action_unfocus(self):
         """Remove focus from any focused widget."""
@@ -1737,25 +1854,36 @@ class DemodApp(App):
 
 def main():
     parser = argparse.ArgumentParser(description="SWL Demod Tool - TUI IQ demodulator")
-    parser.add_argument("--sdr", default=None,
-                        help=f"SDR backend (default: from config or {DEFAULT_BACKEND})")
-    parser.add_argument("--host", default=None, help="Server host (default: from config)")
+    parser.add_argument(
+        "--sdr",
+        default=None,
+        help=f"SDR backend (default: from config or {DEFAULT_BACKEND})",
+    )
+    parser.add_argument(
+        "--host", default=None, help="Server host (default: from config)"
+    )
     parser.add_argument("--iq-port", type=int, default=None, help="IQ server port")
     parser.add_argument("--cat-port", type=int, default=None, help="CAT server port")
     parser.add_argument("--audio-device", default=None, help="Audio output device")
-    parser.add_argument("--version", action="version", version=f"swl-demod {__version__}")
-    parser.add_argument("--debug", action="store_true", help="Enable debug logging to swl-demod.log")
+    parser.add_argument(
+        "--version", action="version", version=f"swl-demod {__version__}"
+    )
+    parser.add_argument(
+        "--debug", action="store_true", help="Enable debug logging to swl-demod.log"
+    )
     args = parser.parse_args()
 
     if args.debug:
         log_dir = os.path.join(
             os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state")),
-            "swl-demod-tool")
+            "swl-demod-tool",
+        )
         os.makedirs(log_dir, mode=0o700, exist_ok=True)
         logging.basicConfig(
             filename=os.path.join(log_dir, "swl-demod.log"),
             level=logging.DEBUG,
-            format="%(asctime)s %(name)s %(levelname)s %(message)s")
+            format="%(asctime)s %(name)s %(levelname)s %(message)s",
+        )
 
     config = load_config()
     backend = args.sdr or config.get("sdr", "backend", fallback=DEFAULT_BACKEND)
@@ -1765,8 +1893,12 @@ def main():
     dream_path = config.get("drm", "dream_path", fallback="") or None
     keybindings = load_keybindings(config)
 
-    app = DemodApp(sdr_source=sdr_source, audio_device=audio_device,
-                   keybindings=keybindings, config=config)
+    app = DemodApp(
+        sdr_source=sdr_source,
+        audio_device=audio_device,
+        keybindings=keybindings,
+        config=config,
+    )
     app.drm.dream_path = app.drm.dream_path or dream_path
     app.run()
 
