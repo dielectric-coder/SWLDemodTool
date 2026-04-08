@@ -185,8 +185,19 @@ class DRMDecoder:
         """Write IQ samples to Dream's stdin, decimating to 48 kHz first."""
         with self._lock:
             proc = self._process
-        if proc is None or proc.poll() is not None or proc.stdin is None:
+        if proc is None or proc.stdin is None:
             return
+        if proc.poll() is not None:
+            # Dream crashed — auto-restart
+            log.warning("Dream process exited (rc=%s), restarting", proc.returncode)
+            cb = self._audio_callback  # save before stop() clears it
+            self.stop()
+            if not self.start(audio_callback=cb):
+                return
+            with self._lock:
+                proc = self._process
+            if proc is None:
+                return
 
         # Decimate from iq_sample_rate to 48 kHz
         if self._decim > 1 and self._decim_fir is not None:
@@ -212,7 +223,7 @@ class DRMDecoder:
         try:
             proc.stdin.write(interleaved.tobytes())
             proc.stdin.flush()
-        except (OSError, BrokenPipeError) as e:
+        except (OSError, BrokenPipeError, ValueError) as e:
             log.debug("write_iq error: %s", e)
 
     def _read_audio(self):
