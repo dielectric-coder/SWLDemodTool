@@ -27,7 +27,6 @@ dependencies = [
     "scipy>=1.10",
     "sounddevice>=0.4",
     "Pillow>=9.0",
-    "pyzmq>=25.0",
 ]
 
 [project.optional-dependencies]
