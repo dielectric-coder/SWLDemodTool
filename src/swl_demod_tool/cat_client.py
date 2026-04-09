@@ -20,18 +20,24 @@ class CATClient:
         self._lock = threading.Lock()
 
     def connect(self):
-        if self.sock:
-            try:
-                self.sock.close()
-            except OSError:
-                pass
+        with self._lock:
+            if self.sock:
+                try:
+                    self.sock.close()
+                except OSError:
+                    pass
+            self.sock = None
+            self.connected = False
         try:
-            self.sock = socket.create_connection((self.host, self.port), timeout=5)
-            self.sock.settimeout(2)
-            self.connected = True
+            sock = socket.create_connection((self.host, self.port), timeout=5)
+            sock.settimeout(2)
+            with self._lock:
+                self.sock = sock
+                self.connected = True
             return True
         except (OSError, TimeoutError):
-            self.connected = False
+            with self._lock:
+                self.connected = False
             return False
 
     def disconnect(self):

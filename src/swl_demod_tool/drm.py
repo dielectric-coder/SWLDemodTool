@@ -167,17 +167,22 @@ class DRMDecoder:
             start_new_session=True,
         )
 
-        self._reader_thread = threading.Thread(
-            target=self._read_audio, daemon=True)
-        self._reader_thread.start()
+        try:
+            self._reader_thread = threading.Thread(
+                target=self._read_audio, daemon=True)
+            self._reader_thread.start()
 
-        self._socket_thread = threading.Thread(
-            target=self._read_status_socket, daemon=True)
-        self._socket_thread.start()
+            self._socket_thread = threading.Thread(
+                target=self._read_status_socket, daemon=True)
+            self._socket_thread.start()
 
-        self._stderr_thread = threading.Thread(
-            target=self._drain_stderr, daemon=True)
-        self._stderr_thread.start()
+            self._stderr_thread = threading.Thread(
+                target=self._drain_stderr, daemon=True)
+            self._stderr_thread.start()
+        except RuntimeError:
+            log.error("Failed to start DRM threads, killing subprocess")
+            self.stop()
+            return False
 
         return True
 
@@ -200,15 +205,19 @@ class DRMDecoder:
                 return
 
         # Decimate from iq_sample_rate to 48 kHz
-        if self._decim > 1 and self._decim_fir is not None:
+        with self._lock:
+            decim = self._decim
+            decim_fir = self._decim_fir
+        if decim > 1 and decim_fir is not None:
             i_in = np.real(iq_samples).astype(np.float32)
             q_in = np.imag(iq_samples).astype(np.float32)
-            i_filt, self._decim_zi_i = lfilter(
-                self._decim_fir, 1.0, i_in, zi=self._decim_zi_i)
-            q_filt, self._decim_zi_q = lfilter(
-                self._decim_fir, 1.0, q_in, zi=self._decim_zi_q)
-            i_dec = i_filt[::self._decim]
-            q_dec = q_filt[::self._decim]
+            with self._lock:
+                i_filt, self._decim_zi_i = lfilter(
+                    decim_fir, 1.0, i_in, zi=self._decim_zi_i)
+                q_filt, self._decim_zi_q = lfilter(
+                    decim_fir, 1.0, q_in, zi=self._decim_zi_q)
+            i_dec = i_filt[::decim]
+            q_dec = q_filt[::decim]
         else:
             i_dec = np.real(iq_samples)
             q_dec = np.imag(iq_samples)
@@ -231,9 +240,13 @@ class DRMDecoder:
         chunk_bytes = 4096
         frame_bytes = 4  # 2 channels x 2 bytes per int16 sample
         remainder = b""
+        with self._lock:
+            proc = self._process
+        if proc is None:
+            return
         try:
             while not self._stop_event.is_set():
-                data = self._process.stdout.read(chunk_bytes)
+                data = proc.stdout.read(chunk_bytes)
                 if not data:
                     break
                 data = remainder + data
@@ -245,9 +258,10 @@ class DRMDecoder:
                 samples = np.frombuffer(data[:usable], dtype=np.int16)
                 stereo = samples.reshape(-1, 2)
                 mono = stereo.mean(axis=1).astype(np.float32) / 32768.0
-                if self._audio_callback:
-                    self._audio_callback(mono)
-        except (OSError, ValueError) as e:
+                cb = self._audio_callback
+                if cb:
+                    cb(mono)
+        except (OSError, ValueError, AttributeError) as e:
             log.debug("_read_audio error: %s", e)
 
     def _read_status_socket(self):
@@ -375,17 +389,23 @@ class DRMDecoder:
 
     def _drain_stderr(self):
         """Drain stderr to prevent pipe blocking."""
+        with self._lock:
+            proc = self._process
+        if proc is None:
+            return
         try:
-            for raw_line in self._process.stderr:
+            for raw_line in proc.stderr:
                 log.debug("Dream stderr: %s",
                           raw_line.decode(errors="replace").rstrip())
-        except (OSError, ValueError):
+        except (OSError, ValueError, AttributeError):
             pass
 
     def get_status(self):
-        """Return a copy of the current DRM status dict."""
+        """Return a deep copy of the current DRM status dict."""
         with self._lock:
-            return dict(self.status)
+            st = dict(self.status)
+            st["sync_detail"] = dict(st.get("sync_detail", {}))
+            return st
 
     def stop(self):
         """Stop the Dream subprocess and clean up."""
@@ -405,7 +425,8 @@ class DRMDecoder:
             except (subprocess.TimeoutExpired, OSError):
                 try:
                     proc.kill()
-                except OSError:
+                    proc.wait(timeout=2)
+                except (OSError, subprocess.TimeoutExpired):
                     pass
         for t in (self._reader_thread, self._stderr_thread, self._socket_thread):
             if t is not None:

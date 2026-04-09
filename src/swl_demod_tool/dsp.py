@@ -317,18 +317,16 @@ def _cw_env_loop_py(abs_audio, env, env_peak, key_down, edge_sample,
             if edge_dur < min_edge_samples:
                 continue
 
-        if key_down and not key_now:
-            dur_ms = (sample_pos - edge_sample) * 1000.0 / audio_rate
-            gap_ms = 0.0
-            if last_keyup_sample > 0:
-                gap_ms = (edge_sample - last_keyup_sample) * 1000.0 / audio_rate
-            if 15 < dur_ms < 2000:
-                events.append((dur_ms, gap_ms))
-            last_keyup_sample = sample_pos
+            if key_down and not key_now:
+                dur_ms = (sample_pos - edge_sample) * 1000.0 / audio_rate
+                gap_ms = 0.0
+                if last_keyup_sample > 0:
+                    gap_ms = (edge_sample - last_keyup_sample) * 1000.0 / audio_rate
+                if 15 < dur_ms < 2000:
+                    events.append((dur_ms, gap_ms))
+                last_keyup_sample = sample_pos
             edge_sample = sample_pos
-        elif not key_down and key_now:
-            edge_sample = sample_pos
-        key_down = key_now
+            key_down = key_now
 
     return env, env_peak, key_down, edge_sample, last_keyup_sample, events
 
@@ -435,20 +433,18 @@ if _HAS_NUMBA:
                 if edge_dur_samp < min_edge_samples:
                     continue
 
-            if key_down and not key_now:
-                dur_ms = (sample_pos - edge_sample) * 1000.0 / audio_rate
-                gap_ms = 0.0
-                if last_keyup_sample > 0:
-                    gap_ms = (edge_sample - last_keyup_sample) * 1000.0 / audio_rate
-                if 15 < dur_ms < 2000:
-                    event_dur[ec] = dur_ms
-                    event_gap[ec] = gap_ms
-                    ec += 1
-                last_keyup_sample = sample_pos
+                if key_down and not key_now:
+                    dur_ms = (sample_pos - edge_sample) * 1000.0 / audio_rate
+                    gap_ms = 0.0
+                    if last_keyup_sample > 0:
+                        gap_ms = (edge_sample - last_keyup_sample) * 1000.0 / audio_rate
+                    if 15 < dur_ms < 2000:
+                        event_dur[ec] = dur_ms
+                        event_gap[ec] = gap_ms
+                        ec += 1
+                    last_keyup_sample = sample_pos
                 edge_sample = sample_pos
-            elif not key_down and key_now:
-                edge_sample = sample_pos
-            key_down = key_now
+                key_down = key_now
 
         return (env, env_peak, key_down, edge_sample, last_keyup_sample,
                 event_dur, event_gap, ec)
@@ -809,10 +805,10 @@ class Demodulator:
 
     def set_bandwidth(self, bandwidth):
         """Update the demodulation bandwidth (Hz)."""
-        if bandwidth == self.bandwidth:
-            return
-        self.bandwidth = max(100, min(bandwidth, self.iq_sample_rate // 2 - 1))
         with self._lock:
+            if bandwidth == self.bandwidth:
+                return
+            self.bandwidth = max(100, min(bandwidth, self.iq_sample_rate // 2 - 1))
             if self.mode in ("CW+", "CW-"):
                 self._lp_taps, self._lp_zi_i = _make_filter(127, _CW_PREFILTER_HZ, self.iq_sample_rate)
                 _, self._lp_zi_q = _make_filter(127, _CW_PREFILTER_HZ, self.iq_sample_rate)
@@ -1509,9 +1505,10 @@ class Demodulator:
 
     def _cw_append_text(self, text):
         """Append text to the decoded buffer, keeping last 120 chars."""
-        self._cw_decoded_text += text
-        if len(self._cw_decoded_text) > 120:
-            self._cw_decoded_text = self._cw_decoded_text[-120:]
+        with self._lock:
+            self._cw_decoded_text += text
+            if len(self._cw_decoded_text) > 120:
+                self._cw_decoded_text = self._cw_decoded_text[-120:]
 
     def _init_rtty_filters(self):
         """Build bandpass filters for RTTY mark and space tones."""
@@ -1633,9 +1630,10 @@ class Demodulator:
         if ch == '\n':
             ch = ' '  # Display newlines as spaces in the text buffer
 
-        self._rtty_decoded_text += ch
-        if len(self._rtty_decoded_text) > 120:
-            self._rtty_decoded_text = self._rtty_decoded_text[-120:]
+        with self._lock:
+            self._rtty_decoded_text += ch
+            if len(self._rtty_decoded_text) > 120:
+                self._rtty_decoded_text = self._rtty_decoded_text[-120:]
 
     def get_rtty_text(self):
         """Return the decoded RTTY text buffer."""
@@ -1724,9 +1722,10 @@ class Demodulator:
                         elif ord(ch) < 32 and ch != '\t':
                             pass  # Skip non-printable control chars
                         else:
-                            self._psk_decoded_text += ch
-                            if len(self._psk_decoded_text) > 120:
-                                self._psk_decoded_text = self._psk_decoded_text[-120:]
+                            with self._lock:
+                                self._psk_decoded_text += ch
+                                if len(self._psk_decoded_text) > 120:
+                                    self._psk_decoded_text = self._psk_decoded_text[-120:]
                 elif len(self._psk_bit_buf) > 20:
                     # Too long without separator — noise, reset
                     self._psk_bit_buf = ""
@@ -1923,7 +1922,9 @@ class Demodulator:
     def _detect_wefax(self, i_dec, q_dec):
         """USB-style demod for WEFAX — return audio and stash raw for decoder."""
         audio = i_dec.astype(np.float32)
-        self._wefax_raw = audio.copy()
+        raw = audio.copy()
+        with self._lock:
+            self._wefax_raw = raw
         return audio
 
     def get_wefax_raw(self):
@@ -1998,8 +1999,9 @@ class Demodulator:
             phase, freq = _pll_loop_py(i_f64, q_f64, out, phase, freq,
                                        alpha, beta, mode_code)
 
-        self._pll_phase = (phase + math.pi) % (2 * math.pi) - math.pi
-        self._pll_freq = max(-0.5, min(0.5, freq))
+        with self._lock:
+            self._pll_phase = (phase + math.pi) % (2 * math.pi) - math.pi
+            self._pll_freq = max(-0.5, min(0.5, freq))
         return out.astype(np.float32)
 
     def reset(self):

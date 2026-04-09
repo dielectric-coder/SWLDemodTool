@@ -66,10 +66,14 @@ class AudioOutput:
 
         available = self._capacity - self._buffered()
         if n > available:
-            # Drop oldest input samples, keep the most recent that fit
-            skip = n - available
-            samples = samples[skip:]
-            n = available
+            if n > self._capacity:
+                # Input larger than entire buffer — keep only the tail
+                samples = samples[n - self._capacity:]
+                n = self._capacity
+                available = self._capacity
+            # Advance read_pos to discard oldest buffered data, keeping newest input
+            discard = n - available
+            self._read_pos = (self._read_pos + discard) % self._buf_len
             self._overflow_count += 1
 
         wp = self._write_pos

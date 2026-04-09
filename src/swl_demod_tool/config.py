@@ -70,8 +70,8 @@ DEFAULT_KEYS = {
     "clear_cw_text": "t",
     "toggle_apf": "p",
     "toggle_nb": "n",
-    "cycle_nb_threshold": "n",
-    "cycle_dnr": "N",
+    "cycle_nb_threshold": "N",
+    "cycle_dnr": "d",
     "toggle_auto_notch": "alt+n",
     "log_entry": "l",
 }

@@ -37,9 +37,12 @@ def create_sdr_source(backend_name, config, cli_args):
 
     # Backend-specific construction
     if backend_name == "elad-fdmduo":
-        host = getattr(cli_args, "host", None) or config.get("server", "host")
-        iq_port = getattr(cli_args, "iq_port", None) or config.getint("server", "iq_port")
-        cat_port = getattr(cli_args, "cat_port", None) or config.getint("server", "cat_port")
+        _host = getattr(cli_args, "host", None)
+        host = _host if _host is not None else config.get("server", "host")
+        _iq = getattr(cli_args, "iq_port", None)
+        iq_port = _iq if _iq is not None else config.getint("server", "iq_port")
+        _cat = getattr(cli_args, "cat_port", None)
+        cat_port = _cat if _cat is not None else config.getint("server", "cat_port")
         return cls(host=host, iq_port=iq_port, cat_port=cat_port)
 
     # Generic fallback for future backends

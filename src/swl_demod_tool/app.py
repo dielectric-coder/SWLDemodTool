@@ -82,6 +82,7 @@ def _find_sked_csv():
 _sked_cache_path = None
 _sked_cache_mtime = None
 _sked_cache_data = []
+_sked_cache_lock = threading.Lock()
 
 
 def _lookup_station(freq_hz):
@@ -102,22 +103,24 @@ def _lookup_station(freq_hz):
     except OSError:
         return ""
 
-    if csv_path != _sked_cache_path or mtime != _sked_cache_mtime:
-        try:
-            with open(csv_path, "r", encoding="utf-8") as f:
-                reader = csv.reader(f, delimiter=";")
-                next(reader, None)  # skip header
-                _sked_cache_data = [row for row in reader]
-        except OSError:
-            return ""
-        _sked_cache_path = csv_path
-        _sked_cache_mtime = mtime
+    with _sked_cache_lock:
+        if csv_path != _sked_cache_path or mtime != _sked_cache_mtime:
+            try:
+                with open(csv_path, "r", encoding="utf-8") as f:
+                    reader = csv.reader(f, delimiter=";")
+                    next(reader, None)  # skip header
+                    _sked_cache_data = list(reader)
+            except OSError:
+                return ""
+            _sked_cache_path = csv_path
+            _sked_cache_mtime = mtime
+        rows = _sked_cache_data
 
     freq_khz = str(freq_hz / 1000).rstrip("0").rstrip(".")
     now_utc = datetime.now(timezone.utc)
     current_time = int(now_utc.strftime("%H%M"))
 
-    for row in _sked_cache_data:
+    for row in rows:
         if len(row) < 5 or row[0].strip() != freq_khz:
             continue
         time_range = row[1] if len(row) > 1 else ""
@@ -698,7 +701,8 @@ class DemodApp(App):
         ("t", "clear_cw_text", "ClrTxt"),
         ("p", "toggle_apf", "APF"),
         ("n", "toggle_nb", "NB"),
-        ("N", "cycle_dnr", "DNR"),
+        ("N", "cycle_nb_threshold", "NB\u2195"),
+        ("d", "cycle_dnr", "DNR"),
         ("alt+n", "toggle_auto_notch", "DNF"),
         ("l", "log_entry", "Log"),
     ]
@@ -880,7 +884,10 @@ class DemodApp(App):
             pass
         except OSError:
             return
-        if not stat.S_ISFIFO(os.lstat(path).st_mode):
+        try:
+            if not stat.S_ISFIFO(os.lstat(path).st_mode):
+                return
+        except OSError:
             return
         while not self._station_fifo_stop.is_set():
             try:
@@ -1524,17 +1531,21 @@ class DemodApp(App):
         if new_mode == "WEFAX" and old_mode != "WEFAX":
             self._launch_decode_viewer()
 
-        # Transition away from DRM: stop Dream
+        # Set mode FIRST so _on_iq_data routes data correctly during transition
+        self.demod.mode = new_mode
+
+        # Transition away from DRM: stop Dream (mode already changed, so
+        # _on_iq_data will no longer pipe IQ to Dream)
         if old_mode == "DRM" and new_mode != "DRM":
             self.drm.stop()
 
-        # Transition to DRM: start Dream with audio callback
+        # Transition to DRM: start Dream with audio callback (mode already
+        # changed, so _on_iq_data will pipe IQ once Dream is ready)
         if new_mode == "DRM" and old_mode != "DRM":
             if not self.drm.start(audio_callback=self._on_drm_audio):
+                self.demod.mode = old_mode  # revert on failure
                 self.notify("Dream binary not found", severity="error")
                 return
-
-        self.demod.mode = new_mode
         self.demod.reset()
         self.rit_offset = 0
         if new_mode in self._MODE_DEFAULT_BW:
@@ -1787,8 +1798,15 @@ class DemodApp(App):
         dir_name = os.path.dirname(self._log_file)
         if dir_name:
             os.makedirs(dir_name, exist_ok=True)
-        write_header = not os.path.exists(self._log_file)
         now = datetime.now(timezone.utc)
+        write_header = False
+        try:
+            # O_EXCL fails atomically if file exists — no TOCTOU race
+            fd = os.open(self._log_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+            os.close(fd)
+            write_header = True
+        except FileExistsError:
+            pass
         with open(self._log_file, "a", newline="") as f:
             writer = csv.writer(f)
             if write_header:

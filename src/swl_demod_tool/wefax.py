@@ -113,6 +113,9 @@ class WEFAXDecoder:
         self._delay_zi = np.zeros(half, dtype=np.float64)
         self._hilbert_delay = half
 
+    def __del__(self):
+        self.cleanup()
+
     def get_state(self):
         with self._lock:
             return self._state
@@ -166,13 +169,13 @@ class WEFAXDecoder:
         if len(audio) == 0:
             return
 
-        # FM discriminator: bandpass -> analytic signal -> phase diff -> freq
-        pixel_values = self._fm_discriminate(audio)
-
-        # Tone detection on raw audio (not bandpass filtered)
-        self._detect_tones(audio)
-
         with self._lock:
+            # FM discriminator: bandpass -> analytic signal -> phase diff -> freq
+            pixel_values = self._fm_discriminate(audio)
+
+            # Tone detection on raw audio (not bandpass filtered)
+            self._detect_tones(audio)
+
             if self._state == "IDLE":
                 if self._start_tone_count >= _START_TONE_MIN_S:
                     self._state = "START_TONE"
@@ -370,11 +373,12 @@ class WEFAXDecoder:
         """Write image data and metadata to temp directory for viewer."""
         try:
             raw_path = os.path.join(self._temp_dir, "image.raw")
-            meta_path = os.path.join(self._temp_dir, "meta.json")
 
-            # Write raw pixel data
+            # Write raw pixel data atomically via temp + rename
             if self._image_rows:
-                np.vstack(self._image_rows).tofile(raw_path)
+                tmp_raw = raw_path + ".tmp"
+                np.vstack(self._image_rows).tofile(tmp_raw)
+                os.replace(tmp_raw, raw_path)
 
             # Write metadata
             self._write_meta()

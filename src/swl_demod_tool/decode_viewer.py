@@ -143,11 +143,11 @@ class WefaxView:
         rgb = np.repeat(gray, 3).reshape(height, width, 3)
         rgb_bytes = rgb.tobytes()
 
-        pixbuf = GdkPixbuf.Pixbuf.new_from_data(
-            rgb_bytes, GdkPixbuf.Colorspace.RGB, False, 8,
+        gbytes = GLib.Bytes.new(rgb_bytes)
+        pixbuf = GdkPixbuf.Pixbuf.new_from_bytes(
+            gbytes, GdkPixbuf.Colorspace.RGB, False, 8,
             width, height, width * 3)
 
-        texture = self.picture.get_paintable()
         from gi.repository import Gdk
         texture = Gdk.Texture.new_for_pixbuf(pixbuf)
         self.picture.set_paintable(texture)

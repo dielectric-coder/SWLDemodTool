@@ -34,46 +34,55 @@ class IQClient:
         self._lock = threading.Lock()
         self._queue = queue.Queue(maxsize=_QUEUE_MAX)
 
+    # Maximum plausible sample rate (10 MHz) and bit depths
+    _MAX_SAMPLE_RATE = 10_000_000
+    _VALID_FORMAT_BITS = {16, 24, 32}
+
     def connect(self):
         """Connect to IQ server and read header."""
-        if self.sock:
-            try:
-                self.sock.close()
-            except OSError:
-                pass
+        with self._lock:
+            if self.sock:
+                try:
+                    self.sock.close()
+                except OSError:
+                    pass
+            self.sock = None
+            self.connected = False
         try:
-            self.sock = socket.create_connection((self.host, self.port), timeout=5)
-            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, _SO_RCVBUF)
-            self.sock.settimeout(10.0)
+            sock = socket.create_connection((self.host, self.port), timeout=5)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, _SO_RCVBUF)
+            sock.settimeout(10.0)
+            with self._lock:
+                self.sock = sock
             # Read 16-byte header
             header = self._recv_exact(HEADER_SIZE)
             if header is None or header[:4] != HEADER_MAGIC:
                 self.disconnect()
                 return False
-            magic, self.sample_rate, self.format_bits, _ = struct.unpack(
+            magic, sample_rate, format_bits, _ = struct.unpack(
                 "<4sIII", header
             )
-            if self.sample_rate == 0:
-                log.error("Server reported zero sample rate")
+            if sample_rate == 0 or sample_rate > self._MAX_SAMPLE_RATE:
+                log.error("Server reported invalid sample rate: %d", sample_rate)
                 self.disconnect()
                 return False
-            self.connected = True
+            if format_bits not in self._VALID_FORMAT_BITS:
+                log.error("Server reported unexpected format bits: %d", format_bits)
+                self.disconnect()
+                return False
+            self.sample_rate = sample_rate
+            self.format_bits = format_bits
+            with self._lock:
+                self.connected = True
             return True
         except (OSError, TimeoutError):
-            self.connected = False
+            with self._lock:
+                self.connected = False
             return False
 
     def disconnect(self):
         self._running = False
-        if self._recv_thread and self._recv_thread.is_alive():
-            self._recv_thread.join(timeout=2)
-        if self._proc_thread and self._proc_thread.is_alive():
-            # Unblock process loop waiting on queue
-            try:
-                self._queue.put_nowait(None)
-            except queue.Full:
-                pass
-            self._proc_thread.join(timeout=2)
+        # Close socket FIRST to unblock recv() in the receive thread
         with self._lock:
             if self.sock:
                 try:
@@ -83,6 +92,15 @@ class IQClient:
                 self.sock.close()
                 self.sock = None
             self.connected = False
+        if self._recv_thread and self._recv_thread.is_alive():
+            self._recv_thread.join(timeout=2)
+        if self._proc_thread and self._proc_thread.is_alive():
+            # Unblock process loop waiting on queue
+            try:
+                self._queue.put_nowait(None)
+            except queue.Full:
+                pass
+            self._proc_thread.join(timeout=2)
 
     def start_streaming(self, callback):
         """Start receiving IQ data in background threads.
@@ -114,7 +132,8 @@ class IQClient:
         while self._running:
             data = self._recv_exact(chunk_size)
             if data is None:
-                self.connected = False
+                with self._lock:
+                    self.connected = False
                 break
             try:
                 self._queue.put_nowait(data)
@@ -129,7 +148,10 @@ class IQClient:
                 except queue.Full:
                     pass
         # Signal processing thread to stop
-        self._queue.put(None)
+        try:
+            self._queue.put(None, timeout=2)
+        except queue.Full:
+            pass
 
     def _process_loop(self):
         """Dequeue IQ chunks and invoke callback (DSP runs here)."""
